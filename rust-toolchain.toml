@@ -1,3 +1,5 @@
 [toolchain]
 channel = "1.94.0"
 targets = ["wasm32-wasip1"]
+# GitHub runners install rustup with the minimal profile, which omits clippy
+components = ["clippy"]
