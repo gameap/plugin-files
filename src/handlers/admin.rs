@@ -10,7 +10,7 @@ use serde::Serialize;
 use crate::host_api::HostApi;
 use crate::http::{ApiResult, json_response, query_param};
 use crate::router::RequestParts;
-use crate::services::admin;
+use crate::services::{admin, pickers};
 
 use super::nodes::NodeStatusResponse;
 
@@ -134,4 +134,8 @@ pub fn list_users<H: HostApi>(host: &mut H, parts: &RequestParts) -> ApiResult {
             .collect(),
     };
     Ok(json_response(200, &response))
+}
+
+pub fn picker_servers<H: HostApi>(host: &mut H, parts: &RequestParts) -> ApiResult {
+    pickers::servers(host, parts)
 }

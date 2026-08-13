@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: GameAP Files Plugin API
   description: API for managing FTP/SFTP users and gameap-files server on GameAP nodes
-  version: 0.6.0
+  version: 0.7.0
   license:
     name: MIT
     url: https://opensource.org/licenses/MIT
@@ -207,6 +207,52 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AdminUsersResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      security:
+        - bearerAuth: []
+
+  /admin/pickers/servers:
+    get:
+      tags:
+        - Admin
+      summary: Search game servers for the create-user picker
+      description: >-
+        Case-insensitive substring search over server names, optionally limited
+        to one node. Items are sorted by name; total is the match count before
+        truncation.
+      operationId: adminPickerServers
+      parameters:
+        - name: q
+          in: query
+          required: false
+          description: Case-insensitive server name substring
+          schema:
+            type: string
+        - name: node
+          in: query
+          required: false
+          description: Restrict results to this node
+          schema:
+            type: integer
+            format: int64
+        - name: limit
+          in: query
+          required: false
+          description: Maximum items returned (default 20, capped at 100)
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Matching servers
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PickerServersResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -762,6 +808,33 @@ components:
                             type: string
         total:
           type: integer
+
+    PickerServer:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        node_id:
+          type: integer
+          format: int64
+        enabled:
+          type: boolean
+        game_id:
+          type: string
+
+    PickerServersResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/PickerServer'
+        total:
+          type: integer
+          description: Matched count before truncation
 
     NodeStatus:
       type: object

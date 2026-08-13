@@ -726,6 +726,64 @@ fn admin_users_groups_and_filters() {
     assert_eq!(body["total"], 1);
 }
 
+#[test]
+fn admin_picker_servers_searches_within_node() {
+    let mut host = MockHost::standard();
+    host.servers.insert(
+        5,
+        crate::host_api::ServerInfo {
+            id: 5,
+            node_id: 2,
+            name: "mc".into(),
+            game_id: "minecraft".into(),
+            dir: "/srv/mc".into(),
+            enabled: true,
+        },
+    );
+    host.servers.insert(
+        7,
+        crate::host_api::ServerInfo {
+            id: 7,
+            node_id: 1,
+            name: "Arena".into(),
+            game_id: "tf".into(),
+            dir: "/srv/arena".into(),
+            enabled: false,
+        },
+    );
+
+    // Servers with zero FTP users must be listed — the picker exists to
+    // create the first user on them.
+    let (status, body) = dispatch(
+        &mut host,
+        &request_with_query("GET", "/admin/pickers/servers", &[("node", "1")]),
+    );
+    assert_eq!(status, 200);
+    assert_eq!(body["total"], 2);
+    let items = body["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0]["name"], "Arena", "sorted by lowercased name");
+    assert_eq!(items[0]["id"], 7);
+    assert_eq!(items[0]["node_id"], 1);
+    assert_eq!(items[0]["enabled"], false);
+    assert_eq!(items[0]["game_id"], "tf");
+    assert_eq!(items[1]["name"], "cs");
+
+    let (_, body) = dispatch(
+        &mut host,
+        &request_with_query("GET", "/admin/pickers/servers", &[("q", "CS")]),
+    );
+    assert_eq!(body["total"], 1);
+    assert_eq!(body["items"][0]["name"], "cs");
+
+    let (status, body) = dispatch(
+        &mut host,
+        &request_with_query("GET", "/admin/pickers/servers", &[("node", "9")]),
+    );
+    assert_eq!(status, 200);
+    assert_eq!(body, json!({"items": [], "total": 0}), "empty node is not an error");
+}
+
 // --- events ---
 
 fn task_event(event_type: pb::EventType, node_id: u64, task_id: u64, task_type: &str) -> pb::Event {

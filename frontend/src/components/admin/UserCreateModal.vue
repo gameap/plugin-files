@@ -8,13 +8,10 @@
     <div class="space-y-4">
       <!-- Server selector -->
       <FormField :label="trans('select_server')">
-        <NSelect
+        <ServerPicker
           v-model:value="selectedServerId"
-          :placeholder="trans('select_server_placeholder')"
-          :options="serverOptions"
-          :render-label="renderServerLabel"
+          :node-id="nodeId"
           :disabled="saving"
-          style="width: 100%"
         />
       </FormField>
 
@@ -46,35 +43,19 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, h, resolveComponent } from 'vue';
-import { NSelect, type SelectOption, type SelectRenderLabel } from 'naive-ui';
+import { ref, watch } from 'vue';
 import { usePluginTrans } from '@gameap/plugin-sdk';
 import { usersApi, accessRulesApi, virtualPathsApi, sshKeysApi } from '@/api';
 import FormField from '@/components/form/FormField.vue';
+import ServerPicker from './ServerPicker.vue';
 import UserCreateForm from '@/components/users/UserCreateForm.vue';
 import { PasswordModal } from '@/components/users';
 import type { CreateUserFormData } from '@/components/users/UserCreateForm.vue';
 
-interface ServerOption {
-  label: string;
-  value: number;
-  gameId: string;
-}
-
 const props = defineProps<{
   open: boolean;
-  servers: ServerOption[];
+  nodeId: number;
 }>();
-
-const GGameIcon = resolveComponent('GGameIcon');
-
-const renderServerLabel: SelectRenderLabel = (option) => {
-  const server = props.servers.find((s) => s.value === option.value);
-  return h('div', { class: 'flex items-center gap-2' }, [
-    h(GGameIcon, { game: server?.gameId, size: 'small' }),
-    h('span', option.label as string),
-  ]);
-};
 
 const emit = defineEmits<{
   close: [];
@@ -90,10 +71,6 @@ const saving = ref(false);
 const showPasswordModal = ref(false);
 const createdUsername = ref('');
 const createdPassword = ref('');
-
-const serverOptions = computed<SelectOption[]>(() =>
-  props.servers.map((server) => ({ label: server.label, value: server.value }))
-);
 
 // Reset form when modal opens/closes
 watch(() => props.open, (isOpen) => {

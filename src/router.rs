@@ -3,6 +3,8 @@
 //! declared table stays the single source of truth. Patterns, methods, auth
 //! flags and descriptions are copied verbatim from the Go plugin's
 //! `internal/handlers/router.go` — this table is the public API contract.
+//! `/admin/pickers/servers` is a Rust-era additive route with no Go
+//! counterpart.
 
 use std::collections::HashMap;
 
@@ -16,6 +18,7 @@ use crate::http::{ApiError, ApiResult};
 pub enum RouteId {
     AdminNodes,
     AdminUsers,
+    AdminPickerServers,
     NodeSetup,
     NodeStatus,
     NodeConfigGet,
@@ -56,6 +59,13 @@ pub const ROUTES: &[RouteDef] = &[
         pattern: "/admin/users",
         admin_only: true,
         description: "List all FTP users across all servers",
+    },
+    RouteDef {
+        id: RouteId::AdminPickerServers,
+        method: "GET",
+        pattern: "/admin/pickers/servers",
+        admin_only: true,
+        description: "Search game servers for the create-user picker",
     },
     RouteDef {
         id: RouteId::NodeSetup,
@@ -240,6 +250,7 @@ mod tests {
         let cases: &[(&str, &str, RouteId)] = &[
             ("GET", "/admin/nodes", RouteId::AdminNodes),
             ("GET", "/admin/users", RouteId::AdminUsers),
+            ("GET", "/admin/pickers/servers", RouteId::AdminPickerServers),
             ("POST", "/nodes/1/setup", RouteId::NodeSetup),
             ("GET", "/nodes/1/status", RouteId::NodeStatus),
             ("GET", "/nodes/1/config", RouteId::NodeConfigGet),
@@ -312,6 +323,6 @@ mod tests {
                 route.path
             );
         }
-        assert_eq!(http_routes().len(), 18);
+        assert_eq!(http_routes().len(), 19);
     }
 }

@@ -43,3 +43,17 @@ export interface UserFilters {
   server_id?: number;
   enabled?: boolean;
 }
+
+export interface PickerServer {
+  id: number;
+  name: string;
+  node_id: number;
+  enabled: boolean;
+  game_id: string;
+}
+
+export interface PickerServersResponse {
+  items: PickerServer[];
+  /** Matched count before truncation — may exceed items.length. */
+  total: number;
+}

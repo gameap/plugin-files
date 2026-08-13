@@ -130,7 +130,11 @@ pub struct Argon2Params {
 
 pub trait HostApi {
     fn get_server(&mut self, id: u64) -> HostResult<Option<ServerInfo>>;
-    fn find_servers(&mut self) -> HostResult<Vec<ServerInfo>>;
+    /// Game servers by filter. Empty `ids`/`node_ids` means "unfiltered on that
+    /// axis" — with both empty the host returns EVERY server, unpaginated.
+    /// Results are unordered: the host's sorting field goes raw into ORDER BY,
+    /// so callers sort guest-side instead.
+    fn find_servers(&mut self, ids: &[u64], node_ids: &[u64]) -> HostResult<Vec<ServerInfo>>;
     fn get_node(&mut self, id: u64) -> HostResult<Option<NodeInfo>>;
     fn find_nodes(&mut self) -> HostResult<Vec<NodeInfo>>;
 
@@ -219,9 +223,21 @@ mod wasm {
             Ok(resp.found.then_some(resp.server).flatten().map(server_info))
         }
 
-        fn find_servers(&mut self) -> HostResult<Vec<ServerInfo>> {
-            let resp = host::servers::find_servers(&servers::FindServersRequest::default())
-                .map_err(call_err)?;
+        fn find_servers(&mut self, ids: &[u64], node_ids: &[u64]) -> HostResult<Vec<ServerInfo>> {
+            let filter = (!ids.is_empty() || !node_ids.is_empty()).then(|| servers::ServerFilter {
+                ids: ids.to_vec(),
+                node_ids: node_ids.to_vec(),
+                game_ids: Vec::new(),
+                enabled: None,
+                process_active: None,
+                installed: None,
+            });
+            let resp = host::servers::find_servers(&servers::FindServersRequest {
+                filter,
+                sorting: Vec::new(),
+                pagination: None,
+            })
+            .map_err(call_err)?;
             Ok(resp.servers.into_iter().map(server_info).collect())
         }
 
@@ -591,8 +607,14 @@ pub mod mock {
             Ok(self.servers.get(&id).cloned())
         }
 
-        fn find_servers(&mut self) -> HostResult<Vec<ServerInfo>> {
-            Ok(self.servers.values().cloned().collect())
+        fn find_servers(&mut self, ids: &[u64], node_ids: &[u64]) -> HostResult<Vec<ServerInfo>> {
+            Ok(self
+                .servers
+                .values()
+                .filter(|s| ids.is_empty() || ids.contains(&s.id))
+                .filter(|s| node_ids.is_empty() || node_ids.contains(&s.node_id))
+                .cloned()
+                .collect())
         }
 
         fn get_node(&mut self, id: u64) -> HostResult<Option<NodeInfo>> {

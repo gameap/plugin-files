@@ -1,10 +1,11 @@
-import { apiClient } from './client';
+import axios from 'axios';
+import { BASE } from './client';
 import type { AdminNodesResponse, AdminUsersResponse, UserFilters } from '@/types';
 
 export const adminApi = {
   getNodes: () =>
-    apiClient.get<AdminNodesResponse>('/admin/nodes'),
+    axios.get<AdminNodesResponse>(`${BASE}/admin/nodes`),
 
   getUsers: (filters?: UserFilters) =>
-    apiClient.get<AdminUsersResponse>('/admin/users', { params: filters }),
+    axios.get<AdminUsersResponse>(`${BASE}/admin/users`, { params: filters }),
 };

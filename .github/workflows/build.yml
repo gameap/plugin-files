@@ -50,15 +50,19 @@ jobs:
             plugin-files/frontend/package-lock.json
 
       # The @gameap/ui tarball on npm is missing its icons/ directory, so the
-      # package from the gameap checkout is installed over it. SDK is built with
-      # vite only ("npm run build" also runs tsc, which fails on @gameap/ui's
-      # missing type declarations); the frontend build only needs dist/index.js.
+      # package from the gameap checkout is installed over it. That package
+      # ships no type declarations, so the tsc half of the SDK's "npm run
+      # build" fails on the '@gameap/ui' re-export; the ambient shim types it
+      # as `any` so tsc can emit dist/*.d.ts — without them the frontend
+      # typecheck hits TS7016 on every '@gameap/plugin-sdk' import.
       - name: Build plugin SDK
         working-directory: gameap-api/web/plugin-sdk
         run: |
           npm ci
           npm install --no-save ../frontend/packages/gameap-ui
+          echo "declare module '@gameap/ui';" > src/gameap-ui-shim.d.ts
           npx vite build
+          npx tsc --emitDeclarationOnly
 
       - name: Build frontend
         working-directory: plugin-files/frontend

@@ -26,6 +26,7 @@ import {
   generatePassword,
   getAllNodes,
   getAllUsersGrouped,
+  getPickerServers,
 } from './data';
 
 /**
@@ -237,6 +238,18 @@ export function registerMockHandlers(): void {
 
       const result = getAllUsersGrouped(filters);
       return HttpResponse.json(result);
+    }),
+
+    // Search servers for the create-user picker
+    http.get('/api/plugins/files/admin/pickers/servers', async ({ request }) => {
+      await delay(150);
+      const url = new URL(request.url);
+      const q = url.searchParams.get('q') ?? '';
+      const node = url.searchParams.get('node');
+      const limit = url.searchParams.get('limit');
+      return HttpResponse.json(
+        getPickerServers(q, node ? parseInt(node, 10) : undefined, limit ? parseInt(limit, 10) : 20)
+      );
     }),
 
     // ==================== Access Rules API ====================

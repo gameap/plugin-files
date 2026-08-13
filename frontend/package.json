@@ -1,6 +1,6 @@
 {
   "name": "plugin-files-frontend",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "GameAP Files Plugin Frontend - FTP/SFTP Users Management",
   "type": "module",
   "main": "./dist/plugin.js",

@@ -1,4 +1,5 @@
-import { apiClient } from './client';
+import axios from 'axios';
+import { BASE } from './client';
 import type {
   FtpUser,
   CreateUserRequest,
@@ -9,17 +10,17 @@ import type {
 
 export const usersApi = {
   list: (serverId: number) =>
-    apiClient.get<FtpUser[]>(`/servers/${serverId}/ftp-users`),
+    axios.get<FtpUser[]>(`${BASE}/servers/${serverId}/ftp-users`),
 
   get: (serverId: number, username: string) =>
-    apiClient.get<FtpUser>(`/servers/${serverId}/ftp-users/${encodeURIComponent(username)}`),
+    axios.get<FtpUser>(`${BASE}/servers/${serverId}/ftp-users/${encodeURIComponent(username)}`),
 
   create: (serverId: number, data: CreateUserRequest) =>
-    apiClient.post<CreateUserResponse>(`/servers/${serverId}/ftp-users`, data),
+    axios.post<CreateUserResponse>(`${BASE}/servers/${serverId}/ftp-users`, data),
 
   update: (serverId: number, username: string, data: UpdateUserRequest) =>
-    apiClient.put<FtpUser>(`/servers/${serverId}/ftp-users/${encodeURIComponent(username)}`, data),
+    axios.put<FtpUser>(`${BASE}/servers/${serverId}/ftp-users/${encodeURIComponent(username)}`, data),
 
   delete: (serverId: number, username: string) =>
-    apiClient.delete<DeleteResponse>(`/servers/${serverId}/ftp-users/${encodeURIComponent(username)}`),
+    axios.delete<DeleteResponse>(`${BASE}/servers/${serverId}/ftp-users/${encodeURIComponent(username)}`),
 };

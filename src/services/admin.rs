@@ -70,7 +70,7 @@ pub fn list_all_users<H: HostApi>(
     host: &mut H,
     filters: &UserFilters,
 ) -> Result<AdminUsersResult, ApiError> {
-    let servers = host.find_servers()?;
+    let servers = host.find_servers(&[], &[])?;
     let node_names: BTreeMap<u64, String> = host
         .find_nodes()?
         .into_iter()

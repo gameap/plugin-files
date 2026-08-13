@@ -8,6 +8,7 @@ import type {
   AdminNode,
   AdminUser,
   GroupedNode,
+  PickerServer,
   UserFilters,
 } from '@/types';
 
@@ -26,11 +27,13 @@ export const mockNodes: Array<{ id: number; name: string; ip: string }> = [
  * Maps node_id -> servers
  */
 export const mockServers: Record<number, Array<{ id: number; name: string; game_id: string }>> = {
-  // Node 1 - Main Server: 3 game servers
+  // Node 1 - Main Server: 4 game servers (Palworld has no FTP users, so it
+  // only ever appears through the picker, never in the grouped users tree)
   1: [
     { id: 1, name: 'Minecraft Survival', game_id: 'minecraft' },
     { id: 2, name: 'CS2 Competitive', game_id: 'cs2' },
     { id: 3, name: 'Rust Official', game_id: 'rust' },
+    { id: 7, name: 'Palworld Fresh', game_id: 'palworld' },
   ],
   // Node 2 - EU Node: 2 game servers
   2: [
@@ -568,4 +571,28 @@ export function getAllUsersGrouped(filters?: UserFilters): { grouped: Record<num
   }
 
   return { grouped, total };
+}
+
+/**
+ * Search servers for the create-user picker (GET /admin/pickers/servers)
+ */
+export function getPickerServers(
+  q: string,
+  nodeId?: number,
+  limit = 20
+): { items: PickerServer[]; total: number } {
+  const query = q.toLowerCase();
+  const all: PickerServer[] = Object.entries(mockServers).flatMap(([nid, servers]) =>
+    servers.map((s) => ({
+      id: s.id,
+      name: s.name,
+      node_id: parseInt(nid, 10),
+      enabled: true,
+      game_id: s.game_id,
+    }))
+  );
+  const matched = all
+    .filter((s) => (!nodeId || s.node_id === nodeId) && (!query || s.name.toLowerCase().includes(query)))
+    .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()) || a.id - b.id);
+  return { items: matched.slice(0, Math.min(limit, 100)), total: matched.length };
 }

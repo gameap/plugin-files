@@ -5,4 +5,5 @@ export { default as UserRow } from './UserRow.vue';
 export { default as UserEditModal } from './UserEditModal.vue';
 export { default as NodeUsersFilters } from './NodeUsersFilters.vue';
 export { default as NodeUsersTree } from './NodeUsersTree.vue';
+export { default as ServerPicker } from './ServerPicker.vue';
 export { default as UserCreateModal } from './UserCreateModal.vue';

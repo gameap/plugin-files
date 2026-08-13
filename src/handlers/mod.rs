@@ -18,6 +18,7 @@ pub fn handle<H: HostApi>(host: &mut H, route: RouteId, parts: &RequestParts) ->
     match route {
         RouteId::AdminNodes => admin::list_nodes(host),
         RouteId::AdminUsers => admin::list_users(host, parts),
+        RouteId::AdminPickerServers => admin::picker_servers(host, parts),
         RouteId::NodeSetup => nodes::setup(host, parts),
         RouteId::NodeStatus => nodes::status(host, parts),
         RouteId::NodeConfigGet => nodes::get_config(host, parts),

@@ -33,7 +33,7 @@
   <!-- Create User Modal -->
   <UserCreateModal
     :open="createModalOpen"
-    :servers="serverOptions"
+    :node-id="nodeId"
     @close="createModalOpen = false"
     @created="onUserCreated"
   />

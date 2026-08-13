@@ -6,3 +6,4 @@ export { useQuotaInput, parseSize, formatSize } from './useQuotaInput';
 export { useAdminNodes } from './useAdminNodes';
 export { useNodeUsers } from './useNodeUsers';
 export { useExpandable } from './useExpandable';
+export { useRemoteSearch, mergeSelected } from './useRemoteSearch';
