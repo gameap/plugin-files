@@ -1,0 +1,1097 @@
+openapi: 3.1.0
+info:
+  title: GameAP Files Plugin API
+  description: API for managing FTP/SFTP users and gameap-files server on GameAP nodes
+  version: 0.6.0
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: /plugins/files
+    description: Plugin API base path
+
+tags:
+  - name: Nodes
+    description: Node setup, status and configuration operations
+  - name: Users
+    description: FTP user management
+  - name: Access Rules
+    description: User access rules management
+  - name: Virtual Paths
+    description: Virtual path mounting
+  - name: SSH Keys
+    description: SSH public key management
+  - name: Admin
+    description: Cross-node administration (admin only)
+
+paths:
+  /nodes/{nodeId}/setup:
+    post:
+      tags:
+        - Nodes
+      summary: Setup gameap-files on node
+      description: Initiates gameap-files installation and configuration on the specified node
+      operationId: setupNode
+      parameters:
+        - $ref: '#/components/parameters/nodeId'
+      requestBody:
+        required: false
+        description: Optional FTP/SFTP configuration overrides (defaults apply when omitted)
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NodeConfigPatch'
+      responses:
+        '200':
+          description: Setup initiated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeStatus'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      security:
+        - bearerAuth: []
+
+  /nodes/{nodeId}/status:
+    get:
+      tags:
+        - Nodes
+      summary: Get node status
+      description: Returns the gameap-files installation status for the specified node
+      operationId: getNodeStatus
+      parameters:
+        - $ref: '#/components/parameters/nodeId'
+      responses:
+        '200':
+          description: Node status retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeStatus'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      security:
+        - bearerAuth: []
+
+  /nodes/{nodeId}/config:
+    get:
+      tags:
+        - Nodes
+      summary: Get node FTP/SFTP configuration
+      description: Returns the stored FTP/SFTP configuration for the node (defaults when nothing stored)
+      operationId: getNodeConfig
+      parameters:
+        - $ref: '#/components/parameters/nodeId'
+      responses:
+        '200':
+          description: Configuration retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeConfig'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      security:
+        - bearerAuth: []
+    put:
+      tags:
+        - Nodes
+      summary: Update node FTP/SFTP configuration
+      description: >-
+        Merges the patch into the stored configuration, patches config.yaml on
+        the node and restarts the gameap-files service
+      operationId: updateNodeConfig
+      parameters:
+        - $ref: '#/components/parameters/nodeId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NodeConfigPatch'
+      responses:
+        '200':
+          description: Merged configuration after the update
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeConfig'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      security:
+        - bearerAuth: []
+
+  /admin/nodes:
+    get:
+      tags:
+        - Admin
+      summary: List all nodes with plugin status
+      operationId: adminListNodes
+      responses:
+        '200':
+          description: Nodes retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminNodesResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      security:
+        - bearerAuth: []
+
+  /admin/users:
+    get:
+      tags:
+        - Admin
+      summary: List all FTP users grouped by node and server
+      operationId: adminListUsers
+      parameters:
+        - name: search
+          in: query
+          required: false
+          description: Case-insensitive username substring filter
+          schema:
+            type: string
+        - name: node_id
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int64
+        - name: server_id
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int64
+        - name: enabled
+          in: query
+          required: false
+          description: '"true" keeps enabled users; any other value keeps disabled users'
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Grouped users retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminUsersResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      security:
+        - bearerAuth: []
+
+  /servers/{serverId}/ftp-users:
+    get:
+      tags:
+        - Users
+      summary: List FTP users
+      description: Returns all FTP users for the specified server
+      operationId: listUsers
+      parameters:
+        - $ref: '#/components/parameters/serverId'
+      responses:
+        '200':
+          description: Users retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      security:
+        - bearerAuth: []
+
+    post:
+      tags:
+        - Users
+      summary: Create FTP user
+      description: Creates a new FTP user for the specified server. If password is not provided, it will be auto-generated.
+      operationId: createUser
+      parameters:
+        - $ref: '#/components/parameters/serverId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUserRequest'
+      responses:
+        '201':
+          description: User created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateUserResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: User already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      security:
+        - bearerAuth: []
+
+  /servers/{serverId}/ftp-users/{username}:
+    get:
+      tags:
+        - Users
+      summary: Get FTP user
+      description: Returns the specified FTP user
+      operationId: getUser
+      parameters:
+        - $ref: '#/components/parameters/serverId'
+        - $ref: '#/components/parameters/username'
+      responses:
+        '200':
+          description: User retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      security:
+        - bearerAuth: []
+
+    put:
+      tags:
+        - Users
+      summary: Update FTP user
+      description: Updates the specified FTP user
+      operationId: updateUser
+      parameters:
+        - $ref: '#/components/parameters/serverId'
+        - $ref: '#/components/parameters/username'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateUserRequest'
+      responses:
+        '200':
+          description: User updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      security:
+        - bearerAuth: []
+
+    delete:
+      tags:
+        - Users
+      summary: Delete FTP user
+      description: Deletes the specified FTP user
+      operationId: deleteUser
+      parameters:
+        - $ref: '#/components/parameters/serverId'
+        - $ref: '#/components/parameters/username'
+      responses:
+        '200':
+          description: User deleted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted:
+                    type: boolean
+                    example: true
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      security:
+        - bearerAuth: []
+
+  /servers/{serverId}/ftp-users/{username}/access-rules:
+    get:
+      tags:
+        - Access Rules
+      summary: Get access rules
+      description: Returns the access rules for the specified user
+      operationId: getAccessRules
+      parameters:
+        - $ref: '#/components/parameters/serverId'
+        - $ref: '#/components/parameters/username'
+      responses:
+        '200':
+          description: Access rules retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccessRulesResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      security:
+        - bearerAuth: []
+
+    put:
+      tags:
+        - Access Rules
+      summary: Update access rules
+      description: Replaces the access rules for the specified user
+      operationId: updateAccessRules
+      parameters:
+        - $ref: '#/components/parameters/serverId'
+        - $ref: '#/components/parameters/username'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccessRulesRequest'
+      responses:
+        '200':
+          description: Access rules updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccessRulesResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      security:
+        - bearerAuth: []
+
+  /servers/{serverId}/ftp-users/{username}/virtual-paths:
+    get:
+      tags:
+        - Virtual Paths
+      summary: Get virtual paths
+      description: Returns the virtual paths for the specified user
+      operationId: getVirtualPaths
+      parameters:
+        - $ref: '#/components/parameters/serverId'
+        - $ref: '#/components/parameters/username'
+      responses:
+        '200':
+          description: Virtual paths retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VirtualPathsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      security:
+        - bearerAuth: []
+
+    put:
+      tags:
+        - Virtual Paths
+      summary: Update virtual paths
+      description: Replaces the virtual paths for the specified user
+      operationId: updateVirtualPaths
+      parameters:
+        - $ref: '#/components/parameters/serverId'
+        - $ref: '#/components/parameters/username'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VirtualPathsRequest'
+      responses:
+        '200':
+          description: Virtual paths updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VirtualPathsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      security:
+        - bearerAuth: []
+
+  /servers/{serverId}/ftp-users/{username}/ssh-keys:
+    get:
+      tags:
+        - SSH Keys
+      summary: List SSH keys
+      description: Returns all SSH public keys for the specified user
+      operationId: listSSHKeys
+      parameters:
+        - $ref: '#/components/parameters/serverId'
+        - $ref: '#/components/parameters/username'
+      responses:
+        '200':
+          description: SSH keys retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SSHKeysResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      security:
+        - bearerAuth: []
+
+    post:
+      tags:
+        - SSH Keys
+      summary: Add SSH key
+      description: Adds an SSH public key to the specified user
+      operationId: addSSHKey
+      parameters:
+        - $ref: '#/components/parameters/serverId'
+        - $ref: '#/components/parameters/username'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddSSHKeyRequest'
+      responses:
+        '201':
+          description: SSH key added successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SSHKeysResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      security:
+        - bearerAuth: []
+
+  /servers/{serverId}/ftp-users/{username}/ssh-keys/{index}:
+    delete:
+      tags:
+        - SSH Keys
+      summary: Delete SSH key
+      description: Removes an SSH public key from the specified user by index
+      operationId: deleteSSHKey
+      parameters:
+        - $ref: '#/components/parameters/serverId'
+        - $ref: '#/components/parameters/username'
+        - $ref: '#/components/parameters/keyIndex'
+      responses:
+        '200':
+          description: SSH key deleted successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SSHKeysResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      security:
+        - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    nodeId:
+      name: nodeId
+      in: path
+      required: true
+      description: Node ID
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
+        example: 1
+
+    serverId:
+      name: serverId
+      in: path
+      required: true
+      description: Server ID
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
+        example: 1
+
+    username:
+      name: username
+      in: path
+      required: true
+      description: FTP username
+      schema:
+        type: string
+        pattern: '^[a-zA-Z][a-zA-Z0-9_]{2,31}$'
+        example: server1_user
+
+    keyIndex:
+      name: index
+      in: path
+      required: true
+      description: SSH key index (0-based)
+      schema:
+        type: integer
+        minimum: 0
+        example: 0
+
+  schemas:
+    NodeConfigPatch:
+      type: object
+      description: Partial FTP/SFTP configuration; omitted fields keep their current values
+      properties:
+        ftp:
+          type: object
+          properties:
+            address:
+              type: string
+              description: Bind address (empty = all interfaces)
+            port:
+              type: integer
+              example: 21
+            passive_port_min:
+              type: integer
+              example: 30000
+            passive_port_max:
+              type: integer
+              example: 30100
+            public_host:
+              type: string
+              description: External IP/host for passive mode
+            tls_enabled:
+              type: boolean
+            tls_implicit_port:
+              type: integer
+              example: 990
+        sftp:
+          type: object
+          properties:
+            port:
+              type: integer
+              example: 2222
+
+    NodeConfig:
+      type: object
+      description: Full stored configuration; sections are null when absent
+      properties:
+        ftp:
+          type:
+            - object
+            - 'null'
+          properties:
+            address:
+              type: string
+            port:
+              type: integer
+            passive_port_min:
+              type: integer
+            passive_port_max:
+              type: integer
+            public_host:
+              type: string
+            tls_enabled:
+              type: boolean
+            tls_implicit_port:
+              type: integer
+        sftp:
+          type:
+            - object
+            - 'null'
+          properties:
+            port:
+              type: integer
+
+    AdminNodesResponse:
+      type: object
+      properties:
+        nodes:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: integer
+                format: int64
+              name:
+                type: string
+              ip:
+                type: string
+              plugin_status:
+                $ref: '#/components/schemas/NodeStatus'
+
+    AdminUsersResponse:
+      type: object
+      properties:
+        grouped:
+          type: object
+          description: Node id (as string key) → grouped node
+          additionalProperties:
+            type: object
+            properties:
+              node_id:
+                type: integer
+                format: int64
+              node_name:
+                type: string
+              servers:
+                type: object
+                description: Server id (as string key) → grouped server
+                additionalProperties:
+                  type: object
+                  properties:
+                    server_id:
+                      type: integer
+                      format: int64
+                    server_name:
+                      type: string
+                    game_id:
+                      type: string
+                    users:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          username:
+                            type: string
+                          enabled:
+                            type: boolean
+                          home_dir:
+                            type: string
+                          quota_bytes:
+                            type: integer
+                            format: int64
+                          description:
+                            type: string
+        total:
+          type: integer
+
+    NodeStatus:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+            - not_installed
+            - installing
+            - installed
+            - failed
+          description: Installation status
+          example: installed
+        version:
+          type: string
+          description: Installed version of gameap-files
+          example: "1.0.0"
+        task_id:
+          type: integer
+          format: int64
+          description: Installation task ID (if installing)
+          example: 123
+        error_message:
+          type: string
+          description: Error message (if failed)
+        last_check:
+          type: integer
+          format: int64
+          description: Last status check timestamp (Unix)
+          example: 1704067200
+      required:
+        - status
+
+    User:
+      type: object
+      properties:
+        username:
+          type: string
+          description: FTP username
+          example: server1_user
+        home_dir:
+          type: string
+          description: User's home directory
+          example: /srv/gameap/server1
+        quota_bytes:
+          type: integer
+          format: int64
+          description: Disk quota in bytes (0 = unlimited)
+          example: 10737418240
+        enabled:
+          type: boolean
+          description: Whether the user is enabled
+          example: true
+        description:
+          type: string
+          description: User description
+          example: Game server user
+        ssh_keys_count:
+          type: integer
+          description: Number of SSH public keys
+          example: 2
+        access_rules:
+          type: array
+          items:
+            $ref: '#/components/schemas/AccessRule'
+        virtual_paths:
+          type: array
+          items:
+            $ref: '#/components/schemas/VirtualPath'
+      required:
+        - username
+        - home_dir
+        - enabled
+
+    CreateUserRequest:
+      type: object
+      properties:
+        username:
+          type: string
+          description: FTP username (alphanumeric with underscores, 3-32 chars)
+          pattern: '^[a-zA-Z][a-zA-Z0-9_]{2,31}$'
+          example: server1_user
+        password:
+          type: string
+          description: User password (optional, auto-generated if not provided)
+          minLength: 8
+          example: mySecurePassword123
+        home_dir:
+          type: string
+          description: User's home directory (optional, defaults to server directory)
+          example: /srv/gameap/server1
+        quota_bytes:
+          type: integer
+          format: int64
+          description: Disk quota in bytes (0 = unlimited)
+          default: 0
+          example: 10737418240
+        enabled:
+          type: boolean
+          description: Whether the user is enabled
+          default: true
+          example: true
+        description:
+          type: string
+          description: User description
+          example: Game server user
+      required:
+        - username
+
+    CreateUserResponse:
+      type: object
+      properties:
+        username:
+          type: string
+          example: server1_user
+        password:
+          type: string
+          description: Generated password (only returned if password was auto-generated)
+          example: aB3dE5fG7hI9jK1m
+        home_dir:
+          type: string
+          example: /srv/gameap/server1
+        quota_bytes:
+          type: integer
+          format: int64
+          example: 10737418240
+        enabled:
+          type: boolean
+          example: true
+        description:
+          type: string
+          example: Game server user
+      required:
+        - username
+        - home_dir
+        - enabled
+
+    UpdateUserRequest:
+      type: object
+      properties:
+        password:
+          type: string
+          description: New password
+          minLength: 8
+        home_dir:
+          type: string
+          description: New home directory
+        quota_bytes:
+          type: integer
+          format: int64
+          description: New disk quota in bytes
+        enabled:
+          type: boolean
+          description: Enable/disable user
+        description:
+          type: string
+          description: New description
+
+    AccessRule:
+      type: object
+      properties:
+        path:
+          type: string
+          description: Path pattern (glob syntax)
+          example: "/**"
+        permissions:
+          type: array
+          items:
+            type: string
+            enum:
+              - read
+              - write
+              - delete
+              - list
+          description: Allowed permissions
+          example: ["read", "write", "delete", "list"]
+      required:
+        - path
+        - permissions
+
+    AccessRulesRequest:
+      type: object
+      properties:
+        rules:
+          type: array
+          items:
+            $ref: '#/components/schemas/AccessRule'
+      required:
+        - rules
+
+    AccessRulesResponse:
+      type: object
+      properties:
+        rules:
+          type: array
+          items:
+            $ref: '#/components/schemas/AccessRule'
+
+    VirtualPath:
+      type: object
+      properties:
+        virtual:
+          type: string
+          description: Virtual path in user's filesystem
+          example: /shared
+        target:
+          type: string
+          description: Target path on the node
+          example: /srv/gameap/shared
+        permissions:
+          type: array
+          items:
+            type: string
+            enum:
+              - read
+              - write
+              - delete
+              - list
+          description: Allowed permissions
+          example: ["read", "list"]
+        read_only:
+          type: boolean
+          description: Whether the path is read-only
+          example: true
+      required:
+        - virtual
+        - target
+        - permissions
+
+    VirtualPathsRequest:
+      type: object
+      properties:
+        paths:
+          type: array
+          items:
+            $ref: '#/components/schemas/VirtualPath'
+      required:
+        - paths
+
+    VirtualPathsResponse:
+      type: object
+      properties:
+        paths:
+          type: array
+          items:
+            $ref: '#/components/schemas/VirtualPath'
+
+    AddSSHKeyRequest:
+      type: object
+      properties:
+        key:
+          type: string
+          description: SSH public key
+          example: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample... user@host"
+      required:
+        - key
+
+    SSHKeysResponse:
+      type: object
+      properties:
+        keys:
+          type: array
+          items:
+            type: string
+          description: List of SSH public keys
+          example:
+            - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample... user@host"
+
+    Error:
+      type: object
+      properties:
+        code:
+          type: string
+          description: Error code
+          example: INVALID_INPUT
+        message:
+          type: string
+          description: Error message
+          example: Invalid username format
+      required:
+        - code
+        - message
+
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: INVALID_INPUT
+            message: Invalid request parameters
+
+    Unauthorized:
+      description: Unauthorized
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: UNAUTHORIZED
+            message: Authentication required
+
+    Forbidden:
+      description: Forbidden
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: FORBIDDEN
+            message: Access denied
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: NOT_FOUND
+            message: User not found
+
+    InternalError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: INTERNAL_ERROR
+            message: An unexpected error occurred

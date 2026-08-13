@@ -1,0 +1,159 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+env:
+  # Ref of gameap/gameap providing web/plugin-sdk; pin to a SHA if the SDK drifts
+  # from frontend/package-lock.json
+  GAMEAP_REF: main
+  # Ref of gameap/gameap-proto providing rust/gameap-plugin-sdk; pin to a SHA if
+  # the SDK drifts from Cargo.lock
+  GAMEAP_PROTO_REF: main
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: plugin-files
+
+      # The frontend depends on file:../../gameap-api/web/plugin-sdk, so the
+      # gameap repo must be checked out as a sibling directory named gameap-api
+      - uses: actions/checkout@v4
+        with:
+          repository: gameap/gameap
+          ref: ${{ env.GAMEAP_REF }}
+          path: gameap-api
+
+      # Cargo.toml depends on path = "../gameap-proto/rust/gameap-plugin-sdk"
+      - uses: actions/checkout@v4
+        with:
+          repository: gameap/gameap-proto
+          ref: ${{ env.GAMEAP_PROTO_REF }}
+          path: gameap-proto
+
+      # The wasm version comes from Cargo.toml at compile time (no ldflags
+      # injection like the Go version had), so the tag must match it.
+      - name: Verify version matches tag
+        working-directory: plugin-files
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          CARGO_VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          if [ "v${CARGO_VERSION}" != "${TAG}" ]; then
+            echo "::error::Cargo.toml version ${CARGO_VERSION} does not match tag ${TAG}"
+            exit 1
+          fi
+          FRONTEND_VERSION=$(node -p "require('./frontend/package.json').version")
+          if [ "${FRONTEND_VERSION}" != "${CARGO_VERSION}" ]; then
+            echo "::error::frontend/package.json version ${FRONTEND_VERSION} does not match Cargo.toml ${CARGO_VERSION}"
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            gameap-api/web/plugin-sdk/package-lock.json
+            plugin-files/frontend/package-lock.json
+
+      # The @gameap/ui tarball on npm is missing its icons/ directory, so the
+      # package from the gameap checkout is installed over it. SDK is built with
+      # vite only ("npm run build" also runs tsc, which fails on @gameap/ui's
+      # missing type declarations); the frontend build only needs dist/index.js.
+      - name: Build plugin SDK
+        working-directory: gameap-api/web/plugin-sdk
+        run: |
+          npm ci
+          npm install --no-save ../frontend/packages/gameap-ui
+          npx vite build
+
+      - name: Build frontend
+        working-directory: plugin-files/frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Set up Rust
+        working-directory: plugin-files
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: plugin-files
+
+      - name: Test
+        working-directory: plugin-files
+        run: cargo test
+
+      - name: Install binaryen
+        run: sudo apt-get update && sudo apt-get install -y binaryen
+
+      - name: Build wasm
+        working-directory: plugin-files
+        run: make wasm
+
+      - name: Sign wasm
+        working-directory: plugin-files
+        env:
+          GPG_SIGNING_KEY: ${{ secrets.GPG_SIGNING_KEY }}
+        run: |
+          if [ -z "$GPG_SIGNING_KEY" ]; then
+            echo "::error::GPG_SIGNING_KEY secret is not set"
+            exit 1
+          fi
+          printf '%s' "$GPG_SIGNING_KEY" | gpg --batch --import
+          gpg --batch --yes --detach-sign --armor -o files.wasm.asc files.wasm
+
+      - name: Publish to plugins.gameap.dev
+        working-directory: plugin-files
+        env:
+          GAMEAP_DEPLOY_TOKEN: ${{ secrets.GAMEAP_DEPLOY_TOKEN }}
+          GAMEAP_PLUGIN_ID: ${{ vars.GAMEAP_PLUGIN_ID }}
+          TAG: ${{ github.event.release.tag_name }}
+          RELEASE_BODY: ${{ github.event.release.body }}
+          PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          if [ -z "$GAMEAP_PLUGIN_ID" ]; then
+            echo "::error::GAMEAP_PLUGIN_ID repository variable is not set"
+            exit 1
+          fi
+          if [ -z "$GAMEAP_DEPLOY_TOKEN" ]; then
+            echo "::error::GAMEAP_DEPLOY_TOKEN secret is not set"
+            exit 1
+          fi
+          VERSION="${TAG#v}"
+          printf '%s' "$RELEASE_BODY" > "$RUNNER_TEMP/changelog.md"
+          ARGS=(-sS
+            -o "$RUNNER_TEMP/response.json"
+            -w "%{http_code}"
+            -H "Authorization: Bearer ${GAMEAP_DEPLOY_TOKEN}"
+            -F "version=${VERSION}"
+            -F "file=@files.wasm"
+            -F "signature=@files.wasm.asc"
+            -F "changelog=<${RUNNER_TEMP}/changelog.md")
+          if [ "$PRERELEASE" != "true" ]; then
+            ARGS+=(-F "is_stable=true")
+          fi
+          STATUS=$(curl "${ARGS[@]}" \
+            "https://plugins.gameap.dev/api/ci/plugins/${GAMEAP_PLUGIN_ID}/versions")
+          cat "$RUNNER_TEMP/response.json"
+          echo
+          if [ "$STATUS" != "201" ]; then
+            echo "::error::Publish failed with HTTP $STATUS"
+            exit 1
+          fi
+
+      - name: Attach artifacts to GitHub release
+        working-directory: plugin-files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" files.wasm files.wasm.asc --clobber

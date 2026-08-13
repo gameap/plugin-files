@@ -1,0 +1,6 @@
+/target
+/files.wasm
+*.wasm.asc
+/frontend/dist
+/frontend/node_modules
+.DS_Store
