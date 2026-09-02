@@ -132,10 +132,12 @@ pub trait HostApi {
     fn get_server(&mut self, id: u64) -> HostResult<Option<ServerInfo>>;
     /// Game servers by filter. Empty `ids`/`node_ids` means "unfiltered on that
     /// axis" — with both empty the host returns EVERY server, unpaginated.
+    /// Soft-deleted servers are never returned (the panel filters them out).
     /// Results are unordered: the host's sorting field goes raw into ORDER BY,
     /// so callers sort guest-side instead.
     fn find_servers(&mut self, ids: &[u64], node_ids: &[u64]) -> HostResult<Vec<ServerInfo>>;
     fn get_node(&mut self, id: u64) -> HostResult<Option<NodeInfo>>;
+    /// Every node, unpaginated and unordered, soft-deleted ones excluded.
     fn find_nodes(&mut self) -> HostResult<Vec<NodeInfo>>;
 
     fn execute_command(&mut self, node_id: u64, command: &str) -> HostResult<CommandOutput>;
@@ -224,7 +226,11 @@ mod wasm {
         }
 
         fn find_servers(&mut self, ids: &[u64], node_ids: &[u64]) -> HostResult<Vec<ServerInfo>> {
-            let filter = (!ids.is_empty() || !node_ids.is_empty()).then(|| servers::ServerFilter {
+            // The filter stays `Some` even when every axis is empty: an absent
+            // filter makes the panel's repository skip its `deleted_at IS NULL`
+            // guard, so soft-deleted rows would leak in. An all-empty filter
+            // narrows nothing but keeps the guard on.
+            let filter = Some(servers::ServerFilter {
                 ids: ids.to_vec(),
                 node_ids: node_ids.to_vec(),
                 game_ids: Vec::new(),
@@ -247,8 +253,15 @@ mod wasm {
         }
 
         fn find_nodes(&mut self) -> HostResult<Vec<NodeInfo>> {
-            let resp =
-                host::nodes::find_nodes(&nodes::FindNodesRequest::default()).map_err(call_err)?;
+            // Same reason as find_servers: `FindNodesRequest::default()` sends no
+            // filter, and the panel's node repository then drops its
+            // `deleted_at IS NULL` guard and hands back deleted nodes too.
+            let resp = host::nodes::find_nodes(&nodes::FindNodesRequest {
+                filter: Some(nodes::NodeFilter::default()),
+                sorting: Vec::new(),
+                pagination: None,
+            })
+            .map_err(call_err)?;
             Ok(resp.nodes.into_iter().map(node_info).collect())
         }
 
