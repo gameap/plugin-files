@@ -137,9 +137,9 @@ fn handle_task_event<H: HostApi>(host: &mut H, event: &pb::Event, completed: boo
                 }
             }
         };
-        if let Err(err) = store::save_status(host, node_id, &new_status) {
-            host.log_error(&format!("failed to handle task completion: {}", err.message));
-        }
+        // Persists the outcome and, on success, pushes every user of the node
+        // to the (possibly relocated) users directory.
+        node_setup::complete_installation(host, node_id, new_status);
         return true;
     }
 

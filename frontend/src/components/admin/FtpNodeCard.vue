@@ -61,6 +61,16 @@
           <GIcon name="users" />
           <span class="ml-1">{{ trans('view_users') }}</span>
         </GButton>
+        <GButton
+          color="white"
+          size="small"
+          :loading="isOperating"
+          :title="trans('update_installation_hint')"
+          @click="emit('update', node.id)"
+        >
+          <GIcon name="sync" />
+          <span class="ml-1">{{ trans('update_installation') }}</span>
+        </GButton>
         <GButton color="white" size="small" :loading="isOperating" @click="emit('configure', node.id)">
           <GIcon name="settings" />
           <span class="ml-1">{{ trans('settings') }}</span>
@@ -91,6 +101,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   setup: [nodeId: number];
+  /** Re-run the installer with the stored configuration (upgrade). */
+  update: [nodeId: number];
   configure: [nodeId: number];
 }>();
 

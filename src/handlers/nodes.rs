@@ -102,7 +102,8 @@ impl<'a> From<&'a NodeConfig> for NodeConfigResponse<'a> {
 pub fn setup<H: HostApi>(host: &mut H, parts: &RequestParts) -> ApiResult {
     let node_id = parse_u64_param(&parts.params, "nodeId")?;
 
-    // An empty body means "all defaults" (Go guarded unmarshal on body length).
+    // An empty body keeps the node's stored configuration (defaults when
+    // nothing is stored yet), which is what the Update button relies on.
     let request: NodeSetupRequest = if parts.body.is_empty() {
         NodeSetupRequest::default()
     } else {

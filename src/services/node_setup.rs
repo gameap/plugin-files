@@ -4,22 +4,50 @@
 //! the install script with flags built from [`NodeConfig`]). Progress is
 //! tracked in storage; completion arrives either through daemon-task events
 //! (matched by task id — see handlers::events) or through the status-poll
-//! fallback with its 15-minute timeout.
+//! fallback with its 15-minute timeout. Whichever observes the completion
+//! first also re-syncs the node's users ([`complete_installation`]).
+//!
+//! Linux nodes run the bash installer; Windows nodes run the PowerShell one.
+//! Windows command strings are built with [`shell_join_windows`] and address
+//! the script through the daemon's `{node_tools_path}` / `{node_work_path}`
+//! placeholders, which the daemon substitutes before splitting a task command.
 
 use crate::domain::{
-    NodeConfig, NodeSetupStatus, SetupStatus, default_node_config, extract_semver,
+    FtpConfig, NodeConfig, NodeOs, NodeSetupStatus, SetupStatus, SftpConfig,
+    default_node_config, extract_semver,
 };
 use crate::handlers::nodes::NodeSetupRequest;
-use crate::host_api::{HostApi, TaskStatus};
+use crate::host_api::{CommandOutput, HostApi, NodeInfo, TaskStatus};
 use crate::http::ApiError;
-use crate::services::{store, yamlpatch};
-use crate::shell::shell_join;
+use crate::services::{store, sync, yamlpatch};
+use crate::shell::{shell_join, shell_join_windows};
 
 pub const INSTALL_SCRIPT_URL: &str =
     "https://raw.githubusercontent.com/gameap/scripts/master/ftp/gameap-files/install-files-linux.sh";
+pub const WINDOWS_INSTALL_SCRIPT_URL: &str =
+    "https://raw.githubusercontent.com/gameap/scripts/master/ftp/gameap-files/install-files-windows.ps1";
+const WINDOWS_INSTALL_SCRIPT_NAME: &str = "install-files-windows.ps1";
 /// If the install task is still "in progress" after this long, mark it failed.
 pub const INSTALLING_TIMEOUT_SECS: i64 = 900;
-pub const NODE_CONFIG_PATH: &str = "/etc/gameap-files/config.yaml";
+/// Relative to the node work path, like every path handed to the daemon.
+pub const NODE_CONFIG_PATH: &str = ".plugins/files/config.yaml";
+pub const WINDOWS_SERVICE_NAME: &str = "gameap-files";
+/// Byte-identical to the Go plugin's: the daemon passes `2>/dev/null` and
+/// `||` through as literal argv, so the useful signal is the daemon's own
+/// "executable file not found" output / non-zero exit.
+const LINUX_VERSION_PROBE_CMD: &str = "gameap-files version 2>/dev/null || echo 'not_installed'";
+/// The Windows installer is pinned to `<tools>\gameap-files`, a directory that
+/// does not exist when `get-tool` refreshes the daemon PATH, so the probe has
+/// to name the binary outright.
+const WINDOWS_BINARY_REL_PATH: &str = r"tools\gameap-files\gameap-files.exe";
+pub const LINUX_RESTART_SYSTEM_CMD: &str = "systemctl restart gameap-files.service";
+/// A rootless gameap-daemon runs gameap-files as a user unit; `systemctl
+/// --user` needs the user manager's runtime directory, which a daemon started
+/// without a session does not have in its environment.
+pub const LINUX_RESTART_USER_CMD: &str = "sh -c 'XDG_RUNTIME_DIR=\"${XDG_RUNTIME_DIR:-/run/user/$(id -u)}\" systemctl --user restart gameap-files.service'";
+/// `-ErrorAction Stop`: a missing service is otherwise a non-terminating
+/// error and `powershell -Command` exits 0 regardless.
+pub const WINDOWS_RESTART_CMD: &str = "powershell -NoProfile -NonInteractive -Command \"Restart-Service -Name gameap-files -ErrorAction Stop\"";
 
 pub fn setup_node<H: HostApi>(
     host: &mut H,
@@ -32,19 +60,19 @@ pub fn setup_node<H: HostApi>(
         return Ok(status); // Already in progress.
     }
 
-    let node = host
-        .get_node(node_id)
-        .map_err(|err| ApiError::internal(format!("failed to get node info: {}", err.into_message())))?
-        .ok_or_else(|| ApiError::internal(format!("node {node_id} not found")))?;
+    let node = get_node(host, node_id)?;
+    let node_config = setup_config(host, node_id, request)?;
+    // Refused before any task exists, so an unsupported node never ends up
+    // "installing".
+    let install_cmd = prepare_install_command(&node, &node_config)?;
 
-    let download_cmd = format!("get-tool {INSTALL_SCRIPT_URL}");
+    let download_cmd = format!("get-tool {}", install_script_url(node.os_kind()));
     let download_task_id = host
         .create_daemon_task(node_id, &download_cmd, None)
         .map_err(|err| {
             ApiError::internal(format!("failed to create download task: {}", err.into_message()))
         })?;
 
-    let install_cmd = prepare_install_command(&node.work_path, request);
     let install_task_id = host
         .create_daemon_task(node_id, &install_cmd, Some(download_task_id))
         .map_err(|err| {
@@ -65,24 +93,58 @@ pub fn setup_node<H: HostApi>(
     if let Err(err) = store::save_status(host, node_id, &new_status) {
         host.log_error(&format!("failed to save status: {}", err.message));
     }
-    let node_config = merged_node_config(request);
     if let Err(err) = store::save_config(host, node_id, &node_config) {
         host.log_error(&format!("failed to save config: {}", err.message));
     }
 
     host.log_info(&format!(
-        "started gameap-files installation: node_id={node_id} download_task_id={download_task_id} install_task_id={install_task_id}"
+        "started gameap-files installation: node_id={node_id} os={} download_task_id={download_task_id} install_task_id={install_task_id}",
+        node.os
     ));
 
     Ok(new_status)
 }
 
-/// Defaults overlaid with whatever the setup request provided
-/// (Go `setupConfigToNodeConfig`).
-pub fn merged_node_config(request: &NodeSetupRequest) -> NodeConfig {
-    let mut config = default_node_config();
+fn get_node<H: HostApi>(host: &mut H, node_id: u64) -> Result<NodeInfo, ApiError> {
+    host.get_node(node_id)
+        .map_err(|err| ApiError::internal(format!("failed to get node info: {}", err.into_message())))?
+        .ok_or_else(|| ApiError::internal(format!("node {node_id} not found")))
+}
+
+/// The node's stored configuration (defaults when nothing is stored) overlaid
+/// with whatever the setup request provided. Re-running setup on an installed
+/// node — the Update button sends no body — therefore keeps its ports; the Go
+/// `setupConfigToNodeConfig` started from the defaults every time.
+pub fn setup_config<H: HostApi>(
+    host: &mut H,
+    node_id: u64,
+    request: &NodeSetupRequest,
+) -> Result<NodeConfig, ApiError> {
+    let mut config = get_config(host, node_id)?;
+    complete_config(&mut config);
     apply_patch(&mut config, request);
-    config
+    Ok(config)
+}
+
+/// Fills sections a stored document lacks from the defaults, so a command
+/// built from it never sees a zero port.
+fn complete_config(config: &mut NodeConfig) {
+    let defaults = default_node_config();
+    if config.ftp.is_none() {
+        config.ftp = defaults.ftp;
+    }
+    if config.sftp.is_none() {
+        config.sftp = defaults.sftp;
+    }
+}
+
+fn effective_sections(config: &NodeConfig) -> (FtpConfig, SftpConfig) {
+    let mut config = config.clone();
+    complete_config(&mut config);
+    (
+        config.ftp.unwrap_or_default(),
+        config.sftp.unwrap_or_default(),
+    )
 }
 
 /// Go `mergeConfigUpdates`: overlay every provided field, creating sections
@@ -119,15 +181,31 @@ pub fn apply_patch(config: &mut NodeConfig, request: &NodeSetupRequest) {
     }
 }
 
-/// Builds the install-script invocation. The daemon splits the string with
-/// go-shellquote and execs directly, so tokens are joined via shell_join —
-/// for ordinary values this yields the same argv as the Go `%q` formatting.
-fn prepare_install_command(work_path: &str, request: &NodeSetupRequest) -> String {
-    let defaults = default_node_config();
-    let mut config = defaults;
-    apply_patch(&mut config, request);
-    let ftp = config.ftp.unwrap_or_default();
-    let sftp = config.sftp.unwrap_or_default();
+fn install_script_url(os: NodeOs) -> &'static str {
+    match os {
+        NodeOs::Windows => WINDOWS_INSTALL_SCRIPT_URL,
+        NodeOs::Linux | NodeOs::Unsupported => INSTALL_SCRIPT_URL,
+    }
+}
+
+/// Builds the install-script invocation for the node's OS. Only Linux and
+/// Windows nodes have an installer; anything else is a 400 for the caller.
+pub fn prepare_install_command(node: &NodeInfo, config: &NodeConfig) -> Result<String, ApiError> {
+    match node.os_kind() {
+        NodeOs::Linux => Ok(linux_install_command(&node.work_path, config)),
+        NodeOs::Windows => Ok(windows_install_command(config)),
+        NodeOs::Unsupported => Err(ApiError::bad_request(format!(
+            "unsupported node OS \"{}\": gameap-files can be installed on linux and windows nodes only",
+            node.os
+        ))),
+    }
+}
+
+/// The daemon splits the string with go-shellquote and execs directly, so
+/// tokens are joined via shell_join — for ordinary values this yields the
+/// same argv as the Go `%q` formatting.
+fn linux_install_command(work_path: &str, config: &NodeConfig) -> String {
+    let (ftp, sftp) = effective_sections(config);
 
     let data_dir = format!("--data-dir={work_path}");
     let listen = format!("--ftp-listen-address={}:{}", ftp.address, ftp.port);
@@ -151,6 +229,58 @@ fn prepare_install_command(work_path: &str, request: &NodeSetupRequest) -> Strin
     ])
 }
 
+/// The script path must match where `get-tool` put the file, which is the
+/// daemon's own tools directory — hence the placeholder rather than the work
+/// path the panel knows. `-InstallDir` is pinned below that same directory so
+/// the version probe can name the binary; `-DataDir` is the daemon work path,
+/// which makes `<DataDir>\.plugins\files` exactly where this plugin's uploads
+/// land. `-File` stays last among the PowerShell options: everything after it
+/// belongs to the script.
+fn windows_install_command(config: &NodeConfig) -> String {
+    let (ftp, sftp) = effective_sections(config);
+
+    let script = format!("{{node_tools_path}}/{WINDOWS_INSTALL_SCRIPT_NAME}");
+    let install_dir = format!("{{node_tools_path}}/{WINDOWS_SERVICE_NAME}");
+    let listen = format!("{}:{}", ftp.address, ftp.port);
+    let passive_min = ftp.passive_port_min.to_string();
+    let passive_max = ftp.passive_port_max.to_string();
+    let tls_port = format!(":{}", ftp.tls_implicit_port);
+    let sftp_listen = format!(":{}", sftp.port);
+
+    let mut args: Vec<&str> = vec![
+        "powershell",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        &script,
+        "-DataDir",
+        "{node_work_path}",
+        "-InstallDir",
+        &install_dir,
+        "-FtpListenAddress",
+        &listen,
+        "-FtpPassivePortMin",
+        &passive_min,
+        "-FtpPassivePortMax",
+        &passive_max,
+        "-FtpTlsImplicitPort",
+        &tls_port,
+        "-SftpListenAddress",
+        &sftp_listen,
+    ];
+    if !ftp.public_host.is_empty() {
+        args.push("-FtpPublicHost");
+        args.push(&ftp.public_host);
+    }
+    if ftp.tls_enabled {
+        args.push("-FtpTlsEnabled");
+    }
+
+    shell_join_windows(&args)
+}
+
 pub fn get_status<H: HostApi>(
     host: &mut H,
     node_id: u64,
@@ -166,8 +296,7 @@ pub fn get_status<H: HostApi>(
         match check_daemon_task(host, node_id, status.task_id) {
             Err(err) => host.log_warn(&format!("failed to check task status: {}", err.message)),
             Ok(Some(new_status)) => {
-                store::save_status(host, node_id, &new_status).ok();
-                return Ok(Some(new_status));
+                return Ok(Some(complete_installation(host, node_id, new_status)));
             }
             Ok(None) => {}
         }
@@ -200,17 +329,44 @@ pub fn get_status<H: HostApi>(
     Ok(Some(status))
 }
 
-/// Probes `gameap-files version` on the node. The command string is
-/// byte-identical to the Go plugin's: the daemon passes `2>/dev/null` and
-/// `||` through as literal argv, so the useful signal is the daemon's own
-/// "executable file not found" output / non-zero exit — which is exactly what
-/// the fallback string checks match.
+/// Persists the outcome of an installation. A successful one also pushes
+/// every user of the node to the users directory and sweeps the misplaced
+/// files of earlier releases — once: the flag guards against the event and
+/// the status poll both observing the same completion, or two panel
+/// instances sharing one storage.
+pub fn complete_installation<H: HostApi>(
+    host: &mut H,
+    node_id: u64,
+    mut status: NodeSetupStatus,
+) -> NodeSetupStatus {
+    if status.status == SetupStatus::Installed && !status.synced_after_install {
+        // Recorded before the resync so its outcome survives a resync that
+        // runs out of budget.
+        if let Err(err) = store::save_status(host, node_id, &status) {
+            host.log_error(&format!("failed to save status: {}", err.message));
+        }
+        let report = sync::resync_node_users(host, node_id);
+        host.log_info(&format!(
+            "post-install resync: node_id={node_id} synced={} failed={} legacy_removed={}",
+            report.synced, report.failed, report.legacy_removed
+        ));
+        status.synced_after_install = true;
+    }
+    if let Err(err) = store::save_status(host, node_id, &status) {
+        host.log_error(&format!("failed to save status: {}", err.message));
+    }
+    status
+}
+
+/// Probes `gameap-files version` on the node.
 pub fn check_installation<H: HostApi>(
     host: &mut H,
     node_id: u64,
 ) -> Result<NodeSetupStatus, ApiError> {
+    let node = host.get_node(node_id).ok().flatten();
+    let probe = version_probe_command(node.as_ref());
     let resp = host
-        .execute_command(node_id, "gameap-files version 2>/dev/null || echo 'not_installed'")
+        .execute_command(node_id, &probe)
         .map_err(ApiError::from)?;
     let now = host.now_unix();
 
@@ -252,6 +408,16 @@ pub fn check_installation<H: HostApi>(
             host.log_warn(&format!("installation status output: {}", resp.output));
             Ok(not_installed)
         }
+    }
+}
+
+fn version_probe_command(node: Option<&NodeInfo>) -> String {
+    match node {
+        Some(node) if node.os_kind() == NodeOs::Windows => {
+            let binary = sync::join_node_path(&node.work_path, WINDOWS_BINARY_REL_PATH);
+            shell_join_windows(&[&binary, "version"])
+        }
+        _ => LINUX_VERSION_PROBE_CMD.to_string(),
     }
 }
 
@@ -307,6 +473,8 @@ fn apply_config_to_node<H: HostApi>(
     node_id: u64,
     config: &NodeConfig,
 ) -> Result<(), ApiError> {
+    let node = get_node(host, node_id)?;
+
     let original = host
         .download(node_id, NODE_CONFIG_PATH)
         .map_err(|err| ApiError::internal(format!("failed to download config: {}", err.into_message())))?;
@@ -316,17 +484,56 @@ fn apply_config_to_node<H: HostApi>(
     host.upload(node_id, NODE_CONFIG_PATH, &patched, 0o644)
         .map_err(|err| ApiError::internal(format!("failed to upload config: {}", err.into_message())))?;
 
-    let restart = host
-        .execute_command(node_id, "systemctl restart gameap-files.service")
-        .map_err(|err| {
-            ApiError::internal(format!("failed to restart service: {}", err.into_message()))
-        })?;
-    if restart.exit_code != 0 {
-        return Err(ApiError::internal(format!("restart failed: {}", restart.output)));
-    }
+    restart_service(host, &node)?;
 
     host.log_info(&format!("applied config to node: node_id={node_id}"));
     Ok(())
+}
+
+/// Windows restarts the service; Linux tries the system unit first and falls
+/// back to the user unit of a rootless daemon.
+fn restart_service<H: HostApi>(host: &mut H, node: &NodeInfo) -> Result<(), ApiError> {
+    if node.os_kind() == NodeOs::Windows {
+        let restart = run_restart(host, node.id, WINDOWS_RESTART_CMD)?;
+        if restart.exit_code != 0 {
+            return Err(ApiError::internal(format!(
+                "restart failed: {}",
+                restart.output.trim()
+            )));
+        }
+        return Ok(());
+    }
+
+    let system = run_restart(host, node.id, LINUX_RESTART_SYSTEM_CMD)?;
+    if system.exit_code == 0 {
+        return Ok(());
+    }
+    host.log_warn(&format!(
+        "system unit restart failed on node {} (exit {}), trying the user unit: {}",
+        node.id,
+        system.exit_code,
+        system.output.trim()
+    ));
+
+    let user = run_restart(host, node.id, LINUX_RESTART_USER_CMD)?;
+    if user.exit_code == 0 {
+        return Ok(());
+    }
+    Err(ApiError::internal(format!(
+        "restart failed: system unit: {}; user unit: {}",
+        system.output.trim(),
+        user.output.trim()
+    )))
+}
+
+fn run_restart<H: HostApi>(
+    host: &mut H,
+    node_id: u64,
+    command: &str,
+) -> Result<CommandOutput, ApiError> {
+    host.execute_command(node_id, command).map_err(|err| {
+        ApiError::internal(format!("failed to restart service: {}", err.into_message()))
+    })
 }
 
 #[cfg(test)]
@@ -334,9 +541,40 @@ mod tests {
     use super::*;
     use crate::handlers::nodes::{FtpConfigPatch, SftpConfigPatch};
 
+    fn node(os: &str, work_path: &str) -> NodeInfo {
+        NodeInfo {
+            id: 1,
+            name: "n".into(),
+            ips: vec![],
+            work_path: work_path.into(),
+            os: os.into(),
+        }
+    }
+
+    fn overrides() -> NodeConfig {
+        let mut config = default_node_config();
+        apply_patch(
+            &mut config,
+            &NodeSetupRequest {
+                ftp: Some(FtpConfigPatch {
+                    address: Some("0.0.0.0".into()),
+                    port: Some(2121),
+                    passive_port_min: Some(40000),
+                    passive_port_max: Some(40100),
+                    public_host: Some("ftp.example.com".into()),
+                    tls_enabled: Some(true),
+                    tls_implicit_port: Some(991),
+                }),
+                sftp: Some(SftpConfigPatch { port: Some(2223) }),
+            },
+        );
+        config
+    }
+
     #[test]
     fn install_command_with_defaults() {
-        let cmd = prepare_install_command("/srv/gameap", &NodeSetupRequest::default());
+        let cmd =
+            prepare_install_command(&node("linux", "/srv/gameap"), &default_node_config()).unwrap();
         assert_eq!(
             cmd,
             "install-files-linux.sh --data-dir=/srv/gameap --ftp-listen-address=:21 \
@@ -347,19 +585,7 @@ mod tests {
 
     #[test]
     fn install_command_with_overrides() {
-        let request = NodeSetupRequest {
-            ftp: Some(FtpConfigPatch {
-                address: Some("0.0.0.0".into()),
-                port: Some(2121),
-                passive_port_min: Some(40000),
-                passive_port_max: Some(40100),
-                public_host: Some("ftp.example.com".into()),
-                tls_enabled: Some(true),
-                tls_implicit_port: Some(991),
-            }),
-            sftp: Some(SftpConfigPatch { port: Some(2223) }),
-        };
-        let cmd = prepare_install_command("/srv/game ap", &request);
+        let cmd = prepare_install_command(&node("linux", "/srv/game ap"), &overrides()).unwrap();
         assert!(cmd.contains("'--data-dir=/srv/game ap'"));
         assert!(cmd.contains("--ftp-listen-address=0.0.0.0:2121"));
         assert!(cmd.contains("--ftp-passive-port-min=40000"));
@@ -367,5 +593,73 @@ mod tests {
         assert!(cmd.contains("--ftp-tls-enabled=true"));
         assert!(cmd.contains("--ftp-tls-implicit-port=:991"));
         assert!(cmd.contains("--sftp-listen-address=:2223"));
+    }
+
+    #[test]
+    fn install_command_fills_missing_sections_from_defaults() {
+        let config = NodeConfig {
+            ftp: None,
+            sftp: None,
+        };
+        let cmd = prepare_install_command(&node("", "/srv/gameap"), &config).unwrap();
+        assert!(cmd.contains("--ftp-listen-address=:21"), "{cmd}");
+        assert!(cmd.contains("--sftp-listen-address=:2222"), "{cmd}");
+    }
+
+    #[test]
+    fn windows_install_command_with_defaults() {
+        let cmd =
+            prepare_install_command(&node("windows", r"C:\gameap"), &default_node_config()).unwrap();
+        assert_eq!(
+            cmd,
+            "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass \
+             -File \"{node_tools_path}/install-files-windows.ps1\" \
+             -DataDir \"{node_work_path}\" -InstallDir \"{node_tools_path}/gameap-files\" \
+             -FtpListenAddress :21 -FtpPassivePortMin 30000 -FtpPassivePortMax 30100 \
+             -FtpTlsImplicitPort :990 -SftpListenAddress :2222"
+        );
+    }
+
+    #[test]
+    fn windows_install_command_with_overrides() {
+        let cmd = prepare_install_command(&node("windows", r"C:\gameap"), &overrides()).unwrap();
+        assert!(cmd.contains("-FtpListenAddress 0.0.0.0:2121"), "{cmd}");
+        assert!(cmd.contains("-FtpPassivePortMin 40000"), "{cmd}");
+        assert!(cmd.contains("-FtpPassivePortMax 40100"), "{cmd}");
+        assert!(cmd.contains("-FtpTlsImplicitPort :991"), "{cmd}");
+        assert!(cmd.contains("-SftpListenAddress :2223"), "{cmd}");
+        assert!(cmd.contains("-FtpPublicHost ftp.example.com"), "{cmd}");
+        assert!(cmd.ends_with(" -FtpTlsEnabled"), "{cmd}");
+    }
+
+    #[test]
+    fn unsupported_os_is_rejected() {
+        let err = prepare_install_command(&node("macos", "/Users/gameap"), &default_node_config())
+            .unwrap_err();
+        assert_eq!(err.status, 400);
+        assert!(err.message.starts_with("unsupported node OS \"macos\""), "{}", err.message);
+    }
+
+    #[test]
+    fn install_script_url_per_os() {
+        assert_eq!(install_script_url(NodeOs::Linux), INSTALL_SCRIPT_URL);
+        assert_eq!(install_script_url(NodeOs::Windows), WINDOWS_INSTALL_SCRIPT_URL);
+    }
+
+    #[test]
+    fn version_probe_per_os() {
+        assert_eq!(version_probe_command(None), LINUX_VERSION_PROBE_CMD);
+        assert_eq!(
+            version_probe_command(Some(&node("linux", "/srv/gameap"))),
+            LINUX_VERSION_PROBE_CMD
+        );
+        assert_eq!(
+            version_probe_command(Some(&node("windows", r"C:\gameap"))),
+            r"C:\gameap\tools\gameap-files\gameap-files.exe version"
+        );
+        assert_eq!(
+            version_probe_command(Some(&node("windows", r"C:\Program Files\gameap"))),
+            r#""C:\Program Files\gameap\tools\gameap-files\gameap-files.exe" version"#
+        );
     }
 }

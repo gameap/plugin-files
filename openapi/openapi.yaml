@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: GameAP Files Plugin API
   description: API for managing FTP/SFTP users and gameap-files server on GameAP nodes
-  version: 0.7.0
+  version: 0.8.0
   license:
     name: MIT
     url: https://opensource.org/licenses/MIT
@@ -31,13 +31,19 @@ paths:
       tags:
         - Nodes
       summary: Setup gameap-files on node
-      description: Initiates gameap-files installation and configuration on the specified node
+      description: >-
+        Starts the gameap-files installation, or re-runs the installer on an
+        already installed node (upgrade: the binary is updated, an older
+        /etc/gameap-files layout is migrated into <work_path>/.plugins/files,
+        and every FTP user of the node is re-synced afterwards). Omitted fields
+        keep the node's stored configuration (defaults when nothing is stored).
+        Linux and Windows nodes only; any other OS answers 400.
       operationId: setupNode
       parameters:
         - $ref: '#/components/parameters/nodeId'
       requestBody:
         required: false
-        description: Optional FTP/SFTP configuration overrides (defaults apply when omitted)
+        description: Optional FTP/SFTP configuration overrides (the stored configuration applies when omitted)
         content:
           application/json:
             schema:
@@ -924,8 +930,11 @@ components:
           example: mySecurePassword123
         home_dir:
           type: string
-          description: User's home directory (optional, defaults to server directory)
-          example: /srv/gameap/server1
+          description: >-
+            User's home directory. An absolute path is stored as given; a
+            relative one is resolved under the node's work path. Defaults to
+            the game server directory (<work_path>/<server dir>).
+          example: /srv/gameap/servers/server1
         quota_bytes:
           type: integer
           format: int64
@@ -981,7 +990,7 @@ components:
           minLength: 8
         home_dir:
           type: string
-          description: New home directory
+          description: New home directory (absolute, or relative to the node's work path)
         quota_bytes:
           type: integer
           format: int64

@@ -1,5 +1,5 @@
 import { ref } from 'vue';
-import { adminApi, nodesApi } from '@/api';
+import { adminApi, nodesApi, showApiError } from '@/api';
 import type { AdminNode, NodeSetupConfig, NodeConfigResponse } from '@/types';
 
 export function useAdminNodes() {
@@ -36,6 +36,7 @@ export function useAdminNodes() {
       await fetchNodes();
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Failed to setup node';
+      showApiError(e, 'Failed to setup node');
       throw e;
     } finally {
       operatingNodeId.value = null;

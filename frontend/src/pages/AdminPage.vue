@@ -25,6 +25,7 @@
       :node="node"
       :operating-node-id="operatingNodeId"
       @setup="openSetupModal"
+      @update="onUpdateNode"
       @configure="openConfigModal"
     />
   </div>
@@ -125,6 +126,16 @@ async function onSetupConfirm(config: NodeSetupConfig | undefined) {
     setupNodeId.value = null;
   } catch (e) {
     console.error('Failed to setup node:', e);
+  }
+}
+
+// An empty setup body re-runs the installer with the node's stored
+// configuration, which is how an installed node gets upgraded.
+async function onUpdateNode(nodeId: number) {
+  try {
+    await setupNode(nodeId);
+  } catch (e) {
+    console.error('Failed to update node:', e);
   }
 }
 

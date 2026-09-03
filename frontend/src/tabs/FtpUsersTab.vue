@@ -16,6 +16,7 @@
       :config="nodeConfig"
       :config-loading="configLoading"
       @setup="startNodeSetup"
+      @update="startNodeSetup()"
       @load-config="loadNodeConfig"
       @update-config="updateNodeConfig"
     />

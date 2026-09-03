@@ -84,11 +84,11 @@ ftp:
   tls:
     enabled: false
     implicit_port: ":990"
-    cert_file: /etc/gameap-files/cert.pem
+    cert_file: tls/server.crt
 sftp:
   enabled: true
   listen_addr: ":2222"
-  host_key_file: /etc/gameap-files/ssh_host_ed25519_key
+  host_key_file: ssh/host_ed25519_key
 security:
   argon2:
     memory: 65536
@@ -132,7 +132,7 @@ logging:
         assert_eq!(value["ftp"]["idle_timeout"], Value::from(300));
         assert_eq!(
             value["ftp"]["tls"]["cert_file"],
-            Value::from("/etc/gameap-files/cert.pem")
+            Value::from("tls/server.crt")
         );
         assert_eq!(value["sftp"]["enabled"], Value::from(true));
         assert_eq!(value["security"]["argon2"]["memory"], Value::from(65536));

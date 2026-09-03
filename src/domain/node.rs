@@ -30,6 +30,32 @@ fn is_zero_i64(v: &i64) -> bool {
     *v == 0
 }
 
+fn is_false(v: &bool) -> bool {
+    !*v
+}
+
+/// Operating system of a node as the panel reports it (`linux`, `windows`,
+/// `macos`, `other`). Installation and service control differ per OS; only
+/// Linux and Windows nodes are supported.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NodeOs {
+    Linux,
+    Windows,
+    Unsupported,
+}
+
+impl NodeOs {
+    /// Hosts predating the `os` field report an empty string; those nodes
+    /// were all Linux, which is also what the Go plugin assumed.
+    pub fn parse(os: &str) -> Self {
+        match os.trim().to_ascii_lowercase().as_str() {
+            "" | "linux" => Self::Linux,
+            "windows" => Self::Windows,
+            _ => Self::Unsupported,
+        }
+    }
+}
+
 /// Stored under NODE-scoped key `ftp:setup_status`. omitempty semantics match
 /// the Go struct exactly; `last_check` is always emitted (Go had no omitempty
 /// on it), while the HTTP status DTO omits it — keep the two apart.
@@ -51,6 +77,12 @@ pub struct NodeSetupStatus {
     /// type prefix the Go version filtered on). Absent in Go-written docs.
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub download_task_id: u64,
+    /// Set once the node's users were re-synced after an install finished, so
+    /// the resync runs exactly once per installation even when both the event
+    /// and the status poll observe the completion. Omitted while false, so
+    /// documents written before the field existed round-trip byte for byte.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub synced_after_install: bool,
 }
 
 impl NodeSetupStatus {
@@ -63,6 +95,7 @@ impl NodeSetupStatus {
             last_check: 0,
             started_at: 0,
             download_task_id: 0,
+            synced_after_install: false,
         }
     }
 }
@@ -194,7 +227,24 @@ mod tests {
 
         let installed = r#"{"status":"installed","version":"v1.0.0","last_check":1700000000}"#;
         let status: NodeSetupStatus = serde_json::from_str(installed).unwrap();
+        assert!(!status.synced_after_install, "absent in Go-written docs");
         assert_eq!(serde_json::to_string(&status).unwrap(), installed);
+
+        let synced = r#"{"status":"installed","version":"v1.0.0","last_check":1700000000,"synced_after_install":true}"#;
+        let status: NodeSetupStatus = serde_json::from_str(synced).unwrap();
+        assert!(status.synced_after_install);
+        assert_eq!(serde_json::to_string(&status).unwrap(), synced);
+    }
+
+    #[test]
+    fn node_os_parse_table() {
+        assert_eq!(NodeOs::parse("linux"), NodeOs::Linux);
+        assert_eq!(NodeOs::parse(" Linux "), NodeOs::Linux);
+        assert_eq!(NodeOs::parse(""), NodeOs::Linux);
+        assert_eq!(NodeOs::parse("windows"), NodeOs::Windows);
+        assert_eq!(NodeOs::parse("Windows"), NodeOs::Windows);
+        assert_eq!(NodeOs::parse("macos"), NodeOs::Unsupported);
+        assert_eq!(NodeOs::parse("other"), NodeOs::Unsupported);
     }
 
     #[test]

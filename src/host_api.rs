@@ -72,6 +72,15 @@ pub struct NodeInfo {
     pub name: String,
     pub ips: Vec<String>,
     pub work_path: String,
+    /// `linux`, `windows`, `macos` or `other` as normalized by the panel;
+    /// empty on hosts predating the field.
+    pub os: String,
+}
+
+impl NodeInfo {
+    pub fn os_kind(&self) -> crate::domain::NodeOs {
+        crate::domain::NodeOs::parse(&self.os)
+    }
 }
 
 /// Result of a command executed on a node. `error` is carried but most call
@@ -215,6 +224,7 @@ mod wasm {
             name: n.name,
             ips: n.ips,
             work_path: n.work_path,
+            os: n.os,
         }
     }
 
@@ -304,9 +314,13 @@ mod wasm {
         }
 
         fn download(&mut self, node_id: u64, path: &str) -> HostResult<Vec<u8>> {
+            // offset/length 0 = the whole file, up to the panel's inline limit;
+            // config.yaml is far below it.
             let resp = host::nodefs::download(&nodefs::DownloadRequest {
                 node_id,
                 path: path.to_owned(),
+                offset: 0,
+                length: 0,
             })
             .map_err(call_err)?;
             match resp.error {
@@ -414,10 +428,14 @@ mod wasm {
             key_prefix: &str,
             entity: StorageEntity,
         ) -> HostResult<Vec<(String, Vec<u8>)>> {
+            // No page window: a server's user list is small, and callers
+            // expect the complete set like the Go repository returned.
             let resp = host::storage::list(&storage::StorageListRequest {
                 key_prefix: Some(key_prefix.to_owned()),
                 entity_type: Some(entity.entity_type),
                 entity_id: Some(entity.entity_id),
+                limit: None,
+                offset: None,
             })
             .map_err(call_err)?;
             Ok(resp
@@ -541,7 +559,8 @@ pub mod mock {
     }
 
     impl MockHost {
-        /// Node 1 ("node-1", /srv/gameap) with server 3 ("cs", cstrike).
+        /// Node 1 ("node-1", linux, /srv/gameap) with server 3 ("cs", cstrike).
+        /// The server dir is relative to the work path, as the panel stores it.
         pub fn standard() -> Self {
             let mut host = Self::default();
             host.nodes.insert(
@@ -551,6 +570,7 @@ pub mod mock {
                     name: "node-1".into(),
                     ips: vec!["203.0.113.1".into()],
                     work_path: "/srv/gameap".into(),
+                    os: "linux".into(),
                 },
             );
             host.servers.insert(
@@ -560,11 +580,44 @@ pub mod mock {
                     node_id: 1,
                     name: "cs".into(),
                     game_id: "cstrike".into(),
-                    dir: "/srv/gameap/servers/cs".into(),
+                    dir: "servers/cs".into(),
                     enabled: true,
                 },
             );
             host
+        }
+
+        /// Adds node 7 ("win-1", windows, C:\gameap) with server 9 ("cs2").
+        pub fn with_windows_node(mut self) -> Self {
+            self.nodes.insert(
+                7,
+                NodeInfo {
+                    id: 7,
+                    name: "win-1".into(),
+                    ips: vec!["203.0.113.7".into()],
+                    work_path: r"C:\gameap".into(),
+                    os: "windows".into(),
+                },
+            );
+            self.servers.insert(
+                9,
+                ServerInfo {
+                    id: 9,
+                    node_id: 7,
+                    name: "cs2".into(),
+                    game_id: "cs2".into(),
+                    dir: r"servers\cs2".into(),
+                    enabled: true,
+                },
+            );
+            self
+        }
+
+        pub fn with_node_os(mut self, id: u64, os: &str) -> Self {
+            if let Some(node) = self.nodes.get_mut(&id) {
+                node.os = os.into();
+            }
+            self
         }
 
         pub fn push_result(&mut self, output: &str, exit_code: i32) {

@@ -11,10 +11,26 @@ use serde_json::{Value, json};
 
 use crate::domain::{FtpUser, SetupStatus};
 use crate::host_api::mock::MockHost;
-use crate::host_api::{HostApi, StorageEntity, TaskStatus};
+use crate::host_api::{CommandOutput, HostApi, StorageEntity, TaskStatus};
 use crate::router;
+use crate::services::node_setup::{LINUX_RESTART_SYSTEM_CMD, LINUX_RESTART_USER_CMD, WINDOWS_RESTART_CMD};
 use crate::services::password::ARGON2_PARAMS;
 use crate::services::store;
+
+const USER_YAML_DIR: &str = ".plugins/files/users.d";
+const NODE_CONFIG_YAML: &str = ".plugins/files/config.yaml";
+
+fn user_yaml(username: &str) -> String {
+    format!("{USER_YAML_DIR}/{username}.yaml")
+}
+
+fn stored_status_raw(host: &MockHost, node_id: u64) -> String {
+    String::from_utf8_lossy(
+        host.storage_raw(store::KEY_NODE_SETUP_STATUS, StorageEntity::node(node_id))
+            .expect("status stored"),
+    )
+    .into_owned()
+}
 
 fn request(method: &str, path: &str, body: &[u8]) -> pb::HttpRequest {
     pb::HttpRequest {
@@ -99,14 +115,87 @@ fn create_user_with_generated_password() {
     assert_eq!(String::from_utf8_lossy(list_raw), r#"["bob"]"#);
 
     let yaml = host
-        .file(1, "/etc/gameap-files/users.d/bob.yaml")
+        .file(1, &user_yaml("bob"))
         .expect("yaml synced to node");
     let synced: FtpUser = serde_yaml_ng::from_slice(yaml).expect("valid yaml");
     assert_eq!(synced, user);
-    assert_eq!(
-        host.uploads,
-        vec![(1, "/etc/gameap-files/users.d/bob.yaml".to_string(), 0o600)]
+    assert_eq!(host.uploads, vec![(1, user_yaml("bob"), 0o600)]);
+}
+
+#[test]
+fn create_user_default_home_dir_is_joined_with_work_path() {
+    let mut host = MockHost::standard().with_windows_node();
+    let (status, body) = create_user(&mut host, 9, json!({"username": "bob"}));
+    assert_eq!(status, 201);
+    assert_eq!(body["home_dir"], r"C:\gameap\servers\cs2");
+    assert_eq!(stored_user(&host, 9, "bob").home_dir, r"C:\gameap\servers\cs2");
+    assert_eq!(host.uploads, vec![(7, user_yaml("bob"), 0o600)]);
+}
+
+#[test]
+fn create_user_relative_home_dir_is_resolved() {
+    let mut host = MockHost::standard();
+    let (status, body) = create_user(
+        &mut host,
+        3,
+        json!({"username": "bob", "home_dir": "servers/custom"}),
     );
+    assert_eq!(status, 201);
+    assert_eq!(body["home_dir"], "/srv/gameap/servers/custom");
+    assert_eq!(stored_user(&host, 3, "bob").home_dir, "/srv/gameap/servers/custom");
+}
+
+#[test]
+fn create_user_absolute_home_dir_untouched() {
+    let mut host = MockHost::standard().with_windows_node();
+    let (status, body) = create_user(
+        &mut host,
+        9,
+        json!({"username": "bob", "home_dir": r"D:\ftp\bob"}),
+    );
+    assert_eq!(status, 201);
+    assert_eq!(body["home_dir"], r"D:\ftp\bob");
+
+    let (_, body) = create_user(&mut host, 3, json!({"username": "alice", "home_dir": "/custom"}));
+    assert_eq!(body["home_dir"], "/custom");
+}
+
+#[test]
+fn update_user_relative_home_dir_is_resolved() {
+    let mut host = MockHost::standard();
+    create_user(&mut host, 3, json!({"username": "bob"}));
+
+    let (status, body) = dispatch(
+        &mut host,
+        &request(
+            "PUT",
+            "/servers/3/ftp-users/bob",
+            json!({"home_dir": "servers/moved"}).to_string().as_bytes(),
+        ),
+    );
+    assert_eq!(status, 200);
+    assert_eq!(body["home_dir"], "/srv/gameap/servers/moved");
+    assert_eq!(stored_user(&host, 3, "bob").home_dir, "/srv/gameap/servers/moved");
+
+    let (_, body) = dispatch(
+        &mut host,
+        &request(
+            "PUT",
+            "/servers/3/ftp-users/bob",
+            json!({"home_dir": "/abs"}).to_string().as_bytes(),
+        ),
+    );
+    assert_eq!(body["home_dir"], "/abs");
+}
+
+#[test]
+fn create_user_fails_when_node_missing() {
+    let mut host = MockHost::standard();
+    host.nodes.remove(&1);
+    let (status, body) = create_user(&mut host, 3, json!({"username": "bob"}));
+    assert_eq!(status, 500);
+    assert_eq!(body["code"], "INTERNAL_ERROR");
+    assert_eq!(body["message"], "node 1 not found");
 }
 
 #[test]
@@ -239,10 +328,7 @@ fn delete_user_cleans_storage_and_node() {
         .storage_raw(store::KEY_SERVER_USER_LIST, StorageEntity::server(3))
         .expect("list key kept");
     assert_eq!(String::from_utf8_lossy(list_raw), "[]");
-    assert_eq!(
-        host.removed,
-        vec![(1, "/etc/gameap-files/users.d/bob.yaml".to_string(), false)]
-    );
+    assert_eq!(host.removed, vec![(1, user_yaml("bob"), false)]);
 
     let (status, _) = dispatch(&mut host, &request("DELETE", "/servers/3/ftp-users/bob", b""));
     assert_eq!(status, 404);
@@ -430,6 +516,95 @@ fn setup_creates_chained_tasks_and_stores_state() {
 }
 
 #[test]
+fn setup_with_empty_body_keeps_stored_config() {
+    let mut host = MockHost::standard();
+    host.seed_storage(
+        store::KEY_NODE_CONFIG,
+        StorageEntity::node(1),
+        br#"{"ftp":{"address":"","port":2121,"passive_port_min":30000,"passive_port_max":30100,"public_host":"","tls_enabled":false,"tls_implicit_port":990},"sftp":{"port":2222}}"#,
+    );
+
+    let (status, _) = dispatch(&mut host, &request("POST", "/nodes/1/setup", b""));
+    assert_eq!(status, 200);
+
+    let install_cmd = &host.created_tasks[1].2;
+    assert!(install_cmd.contains("--ftp-listen-address=:2121"), "{install_cmd}");
+
+    let config: Value = serde_json::from_slice(
+        host.storage_raw(store::KEY_NODE_CONFIG, StorageEntity::node(1)).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(config["ftp"]["port"], 2121, "stored config survives an update run");
+
+    let stored: Value = serde_json::from_str(&stored_status_raw(&host, 1)).unwrap();
+    assert!(
+        stored.get("synced_after_install").is_none(),
+        "flag is omitted while false: {stored}"
+    );
+}
+
+#[test]
+fn setup_on_windows_node_chains_powershell_installer() {
+    let mut host = MockHost::standard().with_windows_node();
+    let (status, body) = dispatch(&mut host, &request("POST", "/nodes/7/setup", b""));
+    assert_eq!(status, 200);
+    assert_eq!(body["status"], "installing");
+
+    assert_eq!(host.created_tasks.len(), 2);
+    assert_eq!(
+        host.created_tasks[0].2,
+        "get-tool https://raw.githubusercontent.com/gameap/scripts/master/ftp/gameap-files/install-files-windows.ps1"
+    );
+    assert_eq!(
+        host.created_tasks[1].2,
+        "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass \
+         -File \"{node_tools_path}/install-files-windows.ps1\" \
+         -DataDir \"{node_work_path}\" -InstallDir \"{node_tools_path}/gameap-files\" \
+         -FtpListenAddress :21 -FtpPassivePortMin 30000 -FtpPassivePortMax 30100 \
+         -FtpTlsImplicitPort :990 -SftpListenAddress :2222"
+    );
+    assert_eq!(host.created_tasks[1].3, Some(host.created_tasks[0].0));
+
+    let mut host = MockHost::standard().with_windows_node();
+    let (status, _) = dispatch(
+        &mut host,
+        &request(
+            "POST",
+            "/nodes/7/setup",
+            json!({"ftp": {"address": "0.0.0.0", "port": 2121, "public_host": "ftp.example.com", "tls_enabled": true}})
+                .to_string()
+                .as_bytes(),
+        ),
+    );
+    assert_eq!(status, 200);
+    let install_cmd = &host.created_tasks[1].2;
+    assert!(install_cmd.contains("-FtpListenAddress 0.0.0.0:2121"), "{install_cmd}");
+    assert!(install_cmd.contains("-FtpPublicHost ftp.example.com"), "{install_cmd}");
+    assert!(install_cmd.ends_with(" -FtpTlsEnabled"), "{install_cmd}");
+}
+
+#[test]
+fn setup_rejects_unsupported_node_os() {
+    let mut host = MockHost::standard().with_node_os(1, "macos");
+    let (status, body) = dispatch(&mut host, &request("POST", "/nodes/1/setup", b""));
+    assert_eq!(status, 400);
+    assert_eq!(body["code"], "INVALID_INPUT");
+    assert!(
+        body["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("unsupported node OS \"macos\""),
+        "{body}"
+    );
+    assert!(host.created_tasks.is_empty(), "no task may be created for an unsupported node");
+    assert!(
+        host.storage_raw(store::KEY_NODE_SETUP_STATUS, StorageEntity::node(1))
+            .is_none(),
+        "nothing is recorded for an unsupported node"
+    );
+}
+
+#[test]
 fn setup_with_overrides_and_missing_node() {
     let mut host = MockHost::standard();
     let (status, _) = dispatch(
@@ -461,10 +636,12 @@ fn status_probes_node_when_nothing_stored() {
     assert_eq!(status, 200);
     assert_eq!(body["status"], "installed");
     assert_eq!(body["version"], "v1.2.3");
+    assert_eq!(host.commands, vec!["gameap-files version 2>/dev/null || echo 'not_installed'"]);
     assert!(
         host.storage_raw(store::KEY_NODE_SETUP_STATUS, StorageEntity::node(1)).is_none(),
         "probe result is not persisted (Go parity)"
     );
+    assert!(host.uploads.is_empty(), "an unsaved probe never triggers a resync");
 
     host.push_result("sh: gameap-files: command not found", 0);
     let (_, body) = dispatch(&mut host, &request("GET", "/nodes/1/status", b""));
@@ -496,6 +673,41 @@ fn status_follows_install_task_lifecycle() {
     assert_eq!(body["version"], "1.0.0");
     let stored = store::get_status(&mut host, 1).unwrap().unwrap();
     assert_eq!(stored.status, SetupStatus::Installed);
+}
+
+#[test]
+fn status_probe_on_windows_uses_absolute_binary_path() {
+    let mut host = MockHost::standard().with_windows_node();
+    host.push_result("gameap-files version v1.2.3", 0);
+    let (_, body) = dispatch(&mut host, &request("GET", "/nodes/7/status", b""));
+    assert_eq!(body["status"], "installed");
+    assert_eq!(
+        host.commands,
+        vec![r"C:\gameap\tools\gameap-files\gameap-files.exe version"]
+    );
+}
+
+#[test]
+fn status_poll_completion_resyncs_once() {
+    let mut host = MockHost::standard();
+    create_user(&mut host, 3, json!({"username": "bob"}));
+    host.uploads.clear();
+    host.removed.clear();
+    dispatch(&mut host, &request("POST", "/nodes/1/setup", b""));
+
+    host.set_task_state(102, TaskStatus::Success, "done");
+    host.push_result("gameap-files version 1.0.0", 0);
+    let (_, body) = dispatch(&mut host, &request("GET", "/nodes/1/status", b""));
+    assert_eq!(body["status"], "installed");
+    assert!(body.get("synced_after_install").is_none(), "DTO does not expose the flag");
+    assert_eq!(host.uploads, vec![(1, user_yaml("bob"), 0o600)]);
+    assert_eq!(host.removed, vec![(1, "etc/gameap-files/users.d/bob.yaml".to_string(), false)]);
+    assert!(store::get_status(&mut host, 1).unwrap().unwrap().synced_after_install);
+
+    // A later poll finds the install recorded and resyncs nothing.
+    let (_, body) = dispatch(&mut host, &request("GET", "/nodes/1/status", b""));
+    assert_eq!(body["status"], "installed");
+    assert_eq!(host.uploads.len(), 1);
 }
 
 #[test]
@@ -554,7 +766,7 @@ fn status_times_out_stuck_installations() {
     assert_eq!(body["status"], "installing");
 }
 
-const DAEMON_CONFIG: &str = "server:\n  data_dir: /srv/gameap\nftp:\n  enabled: true\n  listen_addr: \":21\"\n  tls:\n    cert_file: /etc/gameap-files/cert.pem\nsecurity:\n  argon2:\n    memory: 65536\n";
+const DAEMON_CONFIG: &str = "server:\n  data_dir: /srv/gameap\nftp:\n  enabled: true\n  listen_addr: \":21\"\n  tls:\n    cert_file: tls/server.crt\nsecurity:\n  argon2:\n    memory: 65536\n";
 
 #[test]
 fn node_config_get_and_update() {
@@ -566,7 +778,7 @@ fn node_config_get_and_update() {
     assert_eq!(body["ftp"]["passive_port_min"], 30000);
     assert_eq!(body["sftp"]["port"], 2222);
 
-    host.upload(1, "/etc/gameap-files/config.yaml", DAEMON_CONFIG.as_bytes(), 0o644)
+    host.upload(1, NODE_CONFIG_YAML, DAEMON_CONFIG.as_bytes(), 0o644)
         .unwrap();
     host.uploads.clear();
 
@@ -593,22 +805,20 @@ fn node_config_get_and_update() {
     assert_eq!(stored["ftp"]["port"], 2121);
 
     // Node config.yaml was patched, preserving foreign keys, and the service restarted.
-    let patched = host.file(1, "/etc/gameap-files/config.yaml").unwrap();
+    assert_eq!(host.uploads, vec![(1, NODE_CONFIG_YAML.to_string(), 0o644)]);
+    let patched = host.file(1, NODE_CONFIG_YAML).unwrap();
     let patched: serde_yaml_ng::Value = serde_yaml_ng::from_slice(patched).unwrap();
     assert_eq!(patched["ftp"]["listen_addr"], serde_yaml_ng::Value::from(":2121"));
     assert_eq!(
         patched["ftp"]["tls"]["cert_file"],
-        serde_yaml_ng::Value::from("/etc/gameap-files/cert.pem")
+        serde_yaml_ng::Value::from("tls/server.crt")
     );
     assert_eq!(
         patched["security"]["argon2"]["memory"],
         serde_yaml_ng::Value::from(65536)
     );
     assert_eq!(patched["server"]["data_dir"], serde_yaml_ng::Value::from("/srv/gameap"));
-    assert!(host
-        .commands
-        .iter()
-        .any(|cmd| cmd == "systemctl restart gameap-files.service"));
+    assert_eq!(host.commands, vec![LINUX_RESTART_SYSTEM_CMD]);
 
     // Empty body on PUT is a 400 (Go behavior differs from setup here).
     let (status, body) = dispatch(&mut host, &request("PUT", "/nodes/1/config", b""));
@@ -619,11 +829,12 @@ fn node_config_get_and_update() {
 #[test]
 fn node_config_update_fails_when_restart_fails() {
     let mut host = MockHost::standard();
-    host.upload(1, "/etc/gameap-files/config.yaml", DAEMON_CONFIG.as_bytes(), 0o644)
+    host.upload(1, NODE_CONFIG_YAML, DAEMON_CONFIG.as_bytes(), 0o644)
         .unwrap();
+    // Matches both the system and the user unit command.
     host.fail_on.push((
-        "systemctl restart".into(),
-        crate::host_api::CommandOutput {
+        "restart gameap-files.service".into(),
+        CommandOutput {
             output: "unit not found".into(),
             exit_code: 1,
             error: None,
@@ -636,8 +847,75 @@ fn node_config_update_fails_when_restart_fails() {
     assert_eq!(status, 500);
     assert_eq!(
         body["message"],
-        "failed to apply config to node: restart failed: unit not found"
+        "failed to apply config to node: restart failed: system unit: unit not found; user unit: unit not found"
     );
+    assert_eq!(
+        host.commands,
+        vec![LINUX_RESTART_SYSTEM_CMD, LINUX_RESTART_USER_CMD]
+    );
+}
+
+#[test]
+fn node_config_update_falls_back_to_user_unit() {
+    let mut host = MockHost::standard();
+    host.upload(1, NODE_CONFIG_YAML, DAEMON_CONFIG.as_bytes(), 0o644)
+        .unwrap();
+    host.fail_on.push((
+        LINUX_RESTART_SYSTEM_CMD.into(),
+        CommandOutput {
+            output: "Failed to connect to bus".into(),
+            exit_code: 1,
+            error: None,
+        },
+    ));
+    let (status, body) = dispatch(
+        &mut host,
+        &request("PUT", "/nodes/1/config", br#"{"ftp": {"port": 2121}}"#),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        host.commands,
+        vec![LINUX_RESTART_SYSTEM_CMD, LINUX_RESTART_USER_CMD]
+    );
+}
+
+#[test]
+fn node_config_update_on_windows_restarts_via_powershell() {
+    let mut host = MockHost::standard().with_windows_node();
+    host.upload(7, NODE_CONFIG_YAML, DAEMON_CONFIG.as_bytes(), 0o644)
+        .unwrap();
+    let (status, body) = dispatch(
+        &mut host,
+        &request("PUT", "/nodes/7/config", br#"{"ftp": {"port": 2121}}"#),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(host.commands, vec![WINDOWS_RESTART_CMD]);
+    assert_eq!(
+        WINDOWS_RESTART_CMD,
+        "powershell -NoProfile -NonInteractive -Command \"Restart-Service -Name gameap-files -ErrorAction Stop\""
+    );
+
+    let mut host = MockHost::standard().with_windows_node();
+    host.upload(7, NODE_CONFIG_YAML, DAEMON_CONFIG.as_bytes(), 0o644)
+        .unwrap();
+    host.fail_on.push((
+        "Restart-Service".into(),
+        CommandOutput {
+            output: "Cannot find any service with service name 'gameap-files'.".into(),
+            exit_code: 1,
+            error: None,
+        },
+    ));
+    let (status, body) = dispatch(
+        &mut host,
+        &request("PUT", "/nodes/7/config", br#"{"ftp": {"port": 2121}}"#),
+    );
+    assert_eq!(status, 500);
+    assert_eq!(
+        body["message"],
+        "failed to apply config to node: restart failed: Cannot find any service with service name 'gameap-files'."
+    );
+    assert!(host.commands.iter().all(|cmd| !cmd.contains("systemctl")));
 }
 
 // --- admin ---
@@ -652,6 +930,7 @@ fn admin_nodes_lists_status_per_node() {
             name: "node-2".into(),
             ips: vec![],
             work_path: "/srv".into(),
+            os: "linux".into(),
         },
     );
     host.seed_storage(
@@ -682,6 +961,7 @@ fn admin_users_groups_and_filters() {
             name: "node-2".into(),
             ips: vec![],
             work_path: "/srv".into(),
+            os: "linux".into(),
         },
     );
     host.servers.insert(
@@ -845,8 +1125,8 @@ fn server_deleted_wipes_storage_and_node_files() {
     assert_eq!(
         removed_paths,
         vec![
-            "/etc/gameap-files/users.d/alice.yaml",
-            "/etc/gameap-files/users.d/bob.yaml"
+            ".plugins/files/users.d/alice.yaml",
+            ".plugins/files/users.d/bob.yaml"
         ]
     );
     assert!(host.removed.iter().all(|(node, ..)| *node == 1), "ds_id from payload");
@@ -893,6 +1173,63 @@ fn task_events_match_stored_task_ids() {
     // Once no longer installing, further task events are ignored.
     let event = task_event(pb::EventType::DaemonTaskCompleted, 1, 102, "cmdexec");
     assert!(!crate::handlers::events::handle(&mut host, &event).handled);
+}
+
+#[test]
+fn install_completion_event_resyncs_users_and_sweeps_legacy_files() {
+    let mut host = MockHost::standard();
+    create_user(&mut host, 3, json!({"username": "bob"}));
+    create_user(&mut host, 3, json!({"username": "alice"}));
+    host.uploads.clear();
+    host.removed.clear();
+    dispatch(&mut host, &request("POST", "/nodes/1/setup", b""));
+
+    host.push_result("gameap-files version v1.0.0", 0);
+    let event = task_event(pb::EventType::DaemonTaskCompleted, 1, 102, "cmdexec");
+    assert!(crate::handlers::events::handle(&mut host, &event).handled);
+
+    let mut uploaded: Vec<(u64, String, u32)> = host.uploads.clone();
+    uploaded.sort();
+    assert_eq!(
+        uploaded,
+        vec![(1, user_yaml("alice"), 0o600), (1, user_yaml("bob"), 0o600)]
+    );
+    let mut removed: Vec<(u64, String, bool)> = host.removed.clone();
+    removed.sort();
+    assert_eq!(
+        removed,
+        vec![
+            (1, "etc/gameap-files/users.d/alice.yaml".to_string(), false),
+            (1, "etc/gameap-files/users.d/bob.yaml".to_string(), false),
+        ]
+    );
+
+    let stored = store::get_status(&mut host, 1).unwrap().unwrap();
+    assert_eq!(stored.status, SetupStatus::Installed);
+    assert!(stored.synced_after_install);
+    assert!(stored_status_raw(&host, 1).contains("\"synced_after_install\":true"));
+
+    // The same completion delivered again is ignored and syncs nothing more.
+    assert!(!crate::handlers::events::handle(&mut host, &event).handled);
+    assert_eq!(host.uploads.len(), 2);
+}
+
+#[test]
+fn failed_install_does_not_resync() {
+    let mut host = MockHost::standard();
+    create_user(&mut host, 3, json!({"username": "bob"}));
+    host.uploads.clear();
+    dispatch(&mut host, &request("POST", "/nodes/1/setup", b""));
+    host.set_task_state(102, TaskStatus::Error, "boom");
+
+    let event = task_event(pb::EventType::DaemonTaskFailed, 1, 102, "cmdexec");
+    assert!(crate::handlers::events::handle(&mut host, &event).handled);
+    assert!(host.uploads.is_empty());
+
+    let stored = store::get_status(&mut host, 1).unwrap().unwrap();
+    assert_eq!(stored.status, SetupStatus::Failed);
+    assert!(!stored.synced_after_install);
+    assert!(!stored_status_raw(&host, 1).contains("synced_after_install"));
 }
 
 #[test]

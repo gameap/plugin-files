@@ -2,10 +2,13 @@
 //!
 //! The panel's KV storage is the source of truth for FTP users, access rules,
 //! virtual paths and SSH keys; changes are mirrored to nodes as YAML drop-ins
-//! under `/etc/gameap-files/users.d/` (the daemon hot-reloads them). Node
-//! installation runs through chained daemon tasks; per-node FTP/SFTP settings
-//! are patched into `/etc/gameap-files/config.yaml` in place, preserving keys
-//! this plugin does not own.
+//! under `<work_path>/.plugins/files/users.d/` (the daemon hot-reloads them).
+//! Every node path is relative to the daemon work path: gameap-daemon confines
+//! plugin file operations to it, and `.plugins/files` is the service directory
+//! the panel grants this plugin under every path policy. Node installation
+//! runs through chained daemon tasks (Linux and Windows installers); per-node
+//! FTP/SFTP settings are patched into `.plugins/files/config.yaml` in place,
+//! preserving keys this plugin does not own.
 //!
 //! Rust port of the Go plugin `plugin-gameap-files`. Storage JSON, node YAML
 //! and the HTTP API are wire-compatible with data written by the Go version.

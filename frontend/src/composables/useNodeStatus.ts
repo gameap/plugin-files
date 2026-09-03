@@ -1,5 +1,5 @@
 import { ref, watch, onUnmounted, type Ref } from 'vue';
-import { nodesApi } from '@/api';
+import { nodesApi, showApiError } from '@/api';
 import type { NodeSetupStatus, NodeSetupConfig, NodeConfigResponse } from '@/types';
 
 export function useNodeStatus(nodeId: Ref<number | null>) {
@@ -58,6 +58,9 @@ export function useNodeStatus(nodeId: Ref<number | null>) {
       }
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Failed to start setup';
+      // The plugin refuses unsupported node OSes with a 400 whose message is
+      // the only explanation the operator gets.
+      showApiError(e, 'Failed to start setup');
     } finally {
       loading.value = false;
     }
