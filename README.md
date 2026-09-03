@@ -6,8 +6,10 @@ FTP/SFTP daemon on nodes and manages per-server FTP users, access rules,
 virtual path mounts and SSH keys.
 
 Rust rewrite of the original Go plugin (`plugin-gameap-files`). Storage data,
-node-side YAML files and the HTTP API are fully compatible — existing installs
-keep working after the swap.
+node-side YAML files and the HTTP API are fully compatible, so the panel side
+keeps working after the swap. That compatibility does not replace the one-time
+node migration every 0.7.x install still needs — see
+[Upgrading from 0.7.x](#upgrading-from-07x).
 
 *Читайте на других языках: [Русский](README_RU.md)*
 
@@ -27,7 +29,8 @@ keep working after the swap.
 - Users are mirrored to nodes as hot-reloaded YAML drop-ins under
   `<work_path>/.plugins/files/users.d/` — the plugin's service directory
   inside the daemon work path, the one place the daemon lets a panel plugin
-  write to (relative home directories are anchored there as well)
+  write to; a relative `home_dir` is resolved against the node work path
+  itself, not against that directory
 - Admin pages: all nodes with install status, all users grouped by
   node → server with filters
 - Server abilities `ftp-users-view` / `ftp-users-manage` for non-admin access
@@ -83,12 +86,16 @@ path, so everything this plugin writes is addressed relative to it:
 
 ### Upgrading from 0.7.x
 
-Nodes installed by an earlier plugin release keep reading `/etc/gameap-files`
-until **Update** is clicked once: the installer migrates that directory into
-`<work_path>/.plugins/files`, the plugin re-syncs the node's users and sweeps
-the files the old release had left under `<work_path>/etc/gameap-files`.
-Until then, **Settings** on such a node fails with "failed to download
-config", and users created in the panel are not seen by gameap-files.
+After replacing the plugin, click **Update** once on every node installed by
+an earlier release: storage and API compatibility covers the panel side only,
+the node side still has to be migrated. The installer moves
+`/etc/gameap-files` into `<work_path>/.plugins/files`, the plugin re-syncs the
+node's users from the legacy location and sweeps the files the old release had
+left under `<work_path>/etc/gameap-files`.
+
+Until **Update** is clicked, such a node keeps reading `/etc/gameap-files`,
+**Settings** on it fails with "failed to download config", and users created
+in the panel are not seen by gameap-files.
 
 ## Building
 
