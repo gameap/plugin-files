@@ -124,13 +124,17 @@ pub fn create<H: HostApi>(host: &mut H, parts: &RequestParts) -> ApiResult {
     }
 
     // Go resolved the server before creating (a missing server is a 500) and
-    // used its dir as the default home. One lookup serves both here.
+    // used its dir as the default home. The panel stores that dir relative to
+    // the node work path, so it is joined here: gameap-files chroots to the
+    // literal path, and a relative one used to resolve against its working
+    // directory.
     let server = host
         .get_server(server_id)?
         .ok_or_else(|| crate::http::ApiError::internal(format!("server {server_id} not found")))?;
+    let work_path = sync::node_work_path(host, server.node_id)?;
     let home_dir = match input.home_dir.as_deref() {
-        Some(dir) if !dir.is_empty() => dir.to_string(),
-        _ => server.dir,
+        Some(dir) if !dir.is_empty() => sync::resolve_home_dir(&work_path, dir),
+        _ => sync::join_node_path(&work_path, &server.dir),
     };
 
     let result = users::create(
@@ -176,8 +180,15 @@ pub fn update<H: HostApi>(host: &mut H, parts: &RequestParts) -> ApiResult {
     let input: UpdateUserRequest = parse_json_body(parts.body)?;
 
     // Go resolved the server's node before updating; a missing server is a
-    // 500 even though the id itself went unused.
-    sync::node_id_for_server(host, server_id)?;
+    // 500. The node is also where a relative home_dir is anchored.
+    let node_id = sync::node_id_for_server(host, server_id)?;
+    let home_dir = match input.home_dir {
+        Some(dir) if !dir.is_empty() && !sync::is_absolute_node_path(&dir) => {
+            let work_path = sync::node_work_path(host, node_id)?;
+            Some(sync::resolve_home_dir(&work_path, &dir))
+        }
+        other => other,
+    };
 
     let user = users::update(
         host,
@@ -185,7 +196,7 @@ pub fn update<H: HostApi>(host: &mut H, parts: &RequestParts) -> ApiResult {
         &username,
         users::UpdateUserInput {
             password: input.password,
-            home_dir: input.home_dir,
+            home_dir,
             quota_bytes: input.quota_bytes,
             enabled: input.enabled,
             description: input.description,

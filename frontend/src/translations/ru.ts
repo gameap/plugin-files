@@ -15,6 +15,8 @@ export const ru = {
   status_not_installed: 'gameap-files не установлен',
   install: 'Установить',
   retry_setup: 'Повторить установку',
+  update_installation: 'Обновить',
+  update_installation_hint: 'Переустановить последнюю версию gameap-files; настройки и пользователи сохраняются',
   installing: 'Установка',
   node_not_ready: 'gameap-files не установлен на этой ноде. Обратитесь к администратору.',
 

@@ -6,23 +6,31 @@ FTP/SFTP daemon on nodes and manages per-server FTP users, access rules,
 virtual path mounts and SSH keys.
 
 Rust rewrite of the original Go plugin (`plugin-gameap-files`). Storage data,
-node-side YAML files and the HTTP API are fully compatible — existing installs
-keep working after the swap.
+node-side YAML files and the HTTP API are fully compatible, so the panel side
+keeps working after the swap. That compatibility does not replace the one-time
+node migration every 0.7.x install still needs — see
+[Upgrading from 0.7.x](#upgrading-from-07x).
 
 *Читайте на других языках: [Русский](README_RU.md)*
 
 ## Features
 
-- One-click gameap-files installation on nodes (chained daemon tasks, live
-  status tracking through daemon-task events with a poll/timeout fallback)
+- One-click gameap-files installation on Linux and Windows nodes (chained
+  daemon tasks, live status tracking through daemon-task events with a
+  poll/timeout fallback) and an **Update** button that re-runs the installer
+  with the stored settings to upgrade an installed node
 - Per-node FTP/SFTP configuration (`config.yaml` is patched in place — keys
-  the plugin does not own are preserved)
+  the plugin does not own are preserved); the service is restarted through
+  the system unit, the user unit of a rootless daemon, or the Windows service
 - FTP/SFTP users per game server: create/update/delete, Argon2id password
   hashing via the panel's crypto host service, one-time generated passwords
 - Path access rules (`read` / `write` / `delete` / `list`), virtual path
   mounts, SSH public keys
 - Users are mirrored to nodes as hot-reloaded YAML drop-ins under
-  `/etc/gameap-files/users.d/`
+  `<work_path>/.plugins/files/users.d/` — the plugin's service directory
+  inside the daemon work path, the one place the daemon lets a panel plugin
+  write to; a relative `home_dir` is resolved against the node work path
+  itself, not against that directory
 - Admin pages: all nodes with install status, all users grouped by
   node → server with filters
 - Server abilities `ftp-users-view` / `ftp-users-manage` for non-admin access
@@ -59,7 +67,35 @@ Panel KV storage (compatible with the Go plugin):
 - `SERVER_DELETED` — removes the server's users from storage and their YAML
   files from the node (node id taken from the event payload)
 - `DAEMON_TASK_COMPLETED` / `DAEMON_TASK_FAILED` — matched against the
-  install/download task ids stored in the node's setup status
+  install/download task ids stored in the node's setup status; a completed
+  installation re-syncs every user of the node once (`synced_after_install`
+  in the stored status) and removes the misplaced
+  `<work_path>/etc/gameap-files/users.d/*.yaml` files older releases wrote
+
+### Node layout
+
+gameap-daemon confines a panel plugin's file operations to the node work
+path, so everything this plugin writes is addressed relative to it:
+
+| Node path (relative to `work_path`) | Contents |
+|---|---|
+| `.plugins/files/config.yaml` | gameap-files configuration, patched by the settings dialog |
+| `.plugins/files/users.d/<user>.yaml` | one drop-in per FTP user |
+| `tools/install-files-linux.sh`, `tools/install-files-windows.ps1` | installers fetched with `get-tool` |
+| `tools/gameap-files/` (Windows) | binary and service of the Windows install |
+
+### Upgrading from 0.7.x
+
+After replacing the plugin, click **Update** once on every node installed by
+an earlier release: storage and API compatibility covers the panel side only,
+the node side still has to be migrated. The installer moves
+`/etc/gameap-files` into `<work_path>/.plugins/files`, the plugin re-syncs the
+node's users from the legacy location and sweeps the files the old release had
+left under `<work_path>/etc/gameap-files`.
+
+Until **Update** is clicked, such a node keeps reading `/etc/gameap-files`,
+**Settings** on it fails with "failed to download config", and users created
+in the panel are not seen by gameap-files.
 
 ## Building
 

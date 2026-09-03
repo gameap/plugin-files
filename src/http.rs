@@ -85,11 +85,13 @@ pub fn json_response<T: Serialize>(status: i32, value: &T) -> pb::HttpResponse {
             status_code: status,
             headers: json_headers(),
             body,
+            file: None,
         },
         Err(_) => pb::HttpResponse {
             status_code: 500,
             headers: json_headers(),
             body: br#"{"code":"INTERNAL_ERROR","message":"failed to serialize response"}"#.to_vec(),
+            file: None,
         },
     }
 }

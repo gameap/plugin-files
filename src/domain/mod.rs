@@ -9,8 +9,8 @@ pub mod node;
 pub mod user;
 
 pub use node::{
-    FtpConfig, NodeConfig, NodeSetupStatus, SetupStatus, SftpConfig, default_node_config,
-    extract_semver,
+    FtpConfig, NodeConfig, NodeOs, NodeSetupStatus, SetupStatus, SftpConfig,
+    default_node_config, extract_semver,
 };
 pub use user::{AccessRule, FtpUser, VirtualPath, default_access_rules, is_valid_ssh_key,
     validate_username};

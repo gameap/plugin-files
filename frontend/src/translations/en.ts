@@ -15,6 +15,8 @@ export const en = {
   status_not_installed: 'gameap-files is not installed',
   install: 'Install',
   retry_setup: 'Retry Installation',
+  update_installation: 'Update',
+  update_installation_hint: 'Reinstall the latest gameap-files release; settings and users are kept',
   installing: 'Installing',
   node_not_ready: 'gameap-files is not installed on this node. Please contact administrator.',
 

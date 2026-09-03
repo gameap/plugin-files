@@ -15,8 +15,10 @@ env:
   # from frontend/package-lock.json
   GAMEAP_REF: main
   # Ref of gameap/gameap-proto providing rust/gameap-plugin-sdk; pin to a SHA if
-  # the SDK drifts from Cargo.lock
-  GAMEAP_PROTO_REF: main
+  # the SDK drifts from Cargo.lock. Pinned to the head of the proto-updates
+  # branch: HTTPResponse.file / FileRef, which src/http.rs sets, is not on main
+  # yet. Restore `main` once proto-updates is merged.
+  GAMEAP_PROTO_REF: aba9a6c002358ed56691ff1f5c28d448e5f2cdee
 
 jobs:
   build:

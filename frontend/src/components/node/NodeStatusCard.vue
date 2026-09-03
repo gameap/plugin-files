@@ -30,9 +30,19 @@
           </span>
         </GButton>
 
-        <!-- Version badge and settings button -->
+        <!-- Version badge, update and settings buttons -->
         <template v-else-if="status?.status === 'installed'">
           <GStatusBadge status="success" :text="status.version" />
+          <GButton
+            color="white"
+            size="small"
+            :loading="loading"
+            :title="trans('update_installation_hint')"
+            @click="emit('update')"
+          >
+            <GIcon name="sync" />
+            <span class="hidden lg:inline ml-1">{{ trans('update_installation') }}</span>
+          </GButton>
           <GButton
             color="white"
             size="small"
@@ -89,6 +99,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   setup: [config?: NodeSetupConfig];
+  /** Re-run the installer with the stored configuration (upgrade). */
+  update: [];
   loadConfig: [];
   updateConfig: [config: NodeSetupConfig];
 }>();
