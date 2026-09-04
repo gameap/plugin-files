@@ -33,6 +33,55 @@ use crate::host_api::HostApi;
 /// the id existing installs key their storage on — never change it.
 pub const PLUGIN_ID: &str = "files";
 
+/// What the plugin declares in its manifest and what it checks it was actually
+/// given. One list, because two would drift.
+///
+/// - `files`: the users.d drop-ins and config.yaml are written and removed
+///   through nodefs, and writes are the full grant; `files_read` covers only
+///   the config.yaml download and is included in this one anyway.
+/// - `listen_events`: without it `get_subscribed_events` is ignored and the
+///   plugin never learns that a server was deleted or an install task finished.
+/// - `manage_servers`: every daemon task the node installer chains is created
+///   through it.
+/// - `node_commands`: the version probe and the service restart are node
+///   commands, and the installer's tasks are CMD_EXEC, which the panel gates on
+///   this grant a second time.
+pub const REQUIRED_PERMISSIONS: [&str; 4] = [
+    "files",
+    "listen_events",
+    "manage_servers",
+    "node_commands",
+];
+
+/// Says once, at load, which declared permissions the operator did not grant.
+///
+/// It is a diagnosis, not a gate. Whether a missing grant actually denies
+/// anything depends on the panel's `PLUGINS_PERMISSIONS_ENFORCE`, which the host
+/// does not expose — so refusing to work on the strength of this would break a
+/// plugin that is running perfectly well, and the call that really is denied
+/// already carries the panel's own "plugin permission ... required" message.
+/// A host that cannot answer at all is not evidence of anything and is passed
+/// over in silence.
+fn report_missing_grants<H: HostApi>(host: &mut H) {
+    let Ok(granted) = host.plugin_grants() else {
+        return;
+    };
+    let missing: Vec<&str> = REQUIRED_PERMISSIONS
+        .iter()
+        .copied()
+        .filter(|required| !granted.iter().any(|g| g == required))
+        .collect();
+
+    if !missing.is_empty() {
+        host.log_error(&format!(
+            "files: the panel has not granted {}; with permission enforcement on, \
+             node installation and user synchronization will be refused until an \
+             administrator adds them",
+            missing.join(", "),
+        ));
+    }
+}
+
 const FRONTEND_JS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/plugin.js"));
 const FRONTEND_CSS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/plugin.css"));
 
@@ -55,6 +104,10 @@ impl<H: HostApi> Plugin for FilesPlugin<H> {
             description: "Manage FTP/SFTP users and access for game servers".into(),
             author: "GameAP".into(),
             api_version: "1".into(),
+            required_permissions: REQUIRED_PERMISSIONS
+                .iter()
+                .map(|p| (*p).to_string())
+                .collect(),
             ..Default::default()
         })
     }
@@ -64,7 +117,9 @@ impl<H: HostApi> Plugin for FilesPlugin<H> {
         _req: pb::InitializeRequest,
     ) -> Result<pb::InitializeResponse, PluginError> {
         // No node calls at init — the host disables a plugin that overruns its
-        // load deadline; all node work is request/event driven.
+        // load deadline; all node work is request/event driven. The grants
+        // question is a host-side read only.
+        report_missing_grants(&mut self.host);
         self.host.log_info("plugin initialized");
         Ok(pb::InitializeResponse {
             result: Some(gameap_plugin_sdk::ok_result()),
@@ -150,3 +205,82 @@ register_plugin!(
     FilesPlugin<host_api::WasmHost>,
     FilesPlugin::new(host_api::WasmHost)
 );
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::host_api::mock::MockHost;
+
+    fn manifest(host: MockHost) -> pb::PluginInfo {
+        FilesPlugin::new(host)
+            .get_info(pb::GetInfoRequest {})
+            .expect("manifest")
+    }
+
+    #[test]
+    fn the_manifest_declares_every_permission_the_plugin_needs() {
+        let info = manifest(MockHost::default());
+        assert_eq!(info.required_permissions, REQUIRED_PERMISSIONS.to_vec());
+    }
+
+    #[test]
+    fn files_and_node_commands_are_declared() {
+        // The two that carry the whole plugin: every user write reaches the node
+        // through nodefs, and every install step is a node command. A manifest
+        // without them installs and then fails on the first node round-trip.
+        let declared = manifest(MockHost::default()).required_permissions;
+        assert!(declared.iter().any(|p| p == "files"));
+        assert!(declared.iter().any(|p| p == "node_commands"));
+    }
+
+    #[test]
+    fn files_read_is_left_out_because_files_covers_it() {
+        // The panel derives used permissions from the module's imports and drops
+        // files_read when files is present; declaring both would make the
+        // manifest disagree with the upload dry-run report.
+        let declared = manifest(MockHost::default()).required_permissions;
+        assert!(!declared.iter().any(|p| p == "files_read"));
+    }
+
+    #[test]
+    fn a_missing_grant_is_named_once_at_load() {
+        let mut host = MockHost::default();
+        host.plugin_grants = vec![
+            "files".into(),
+            "listen_events".into(),
+            "manage_servers".into(),
+        ];
+
+        report_missing_grants(&mut host);
+
+        let logged = host.logs.join("\n");
+        assert!(logged.contains("node_commands"), "{logged}");
+        assert!(logged.starts_with("ERROR"), "{logged}");
+        assert_eq!(host.logs.len(), 1, "{:?}", host.logs);
+    }
+
+    #[test]
+    fn a_complete_grant_set_says_nothing() {
+        let mut host = MockHost::default();
+        host.plugin_grants = REQUIRED_PERMISSIONS
+            .iter()
+            .map(|p| (*p).to_string())
+            .collect();
+
+        report_missing_grants(&mut host);
+
+        assert!(host.logs.is_empty(), "{:?}", host.logs);
+    }
+
+    #[test]
+    fn a_host_that_cannot_answer_is_not_evidence_of_a_missing_grant() {
+        // Reporting every permission as missing because the question failed
+        // would be a lie, and an alarming one.
+        let mut host = MockHost::default();
+        host.plugin_grants_error = Some("unknown import".into());
+
+        report_missing_grants(&mut host);
+
+        assert!(host.logs.is_empty(), "{:?}", host.logs);
+    }
+}

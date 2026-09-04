@@ -127,8 +127,33 @@ cd frontend && npm run debug   # standalone UI against MSW mocks
 
 ## Installation
 
+Requires GameAP **4.5 or newer**. The plugin reads its own permission grants
+through the `gameap-host` module, which older panels do not provide, and a host
+module the panel does not export makes the wasm fail to load outright rather
+than degrade.
+
 Upload `files.wasm` via **Administration → Plugins** or drop it into the
 panel's plugins directory and restart GameAP.
+
+### Permissions
+
+The manifest declares four permissions, and installing the plugin grants
+exactly those:
+
+| Permission | Needed for |
+|---|---|
+| `files` | Writing and removing the `users.d` drop-ins and `config.yaml` on nodes through `gameap-nodefs` |
+| `node_commands` | The version probe, the service restart and the installer's `CMD_EXEC` daemon tasks |
+| `manage_servers` | Creating those daemon tasks |
+| `listen_events` | Server-deleted and daemon-task events — without it the plugin is never called |
+
+**Updating an already installed plugin grants nothing new.** After upgrading
+from a build that declared nothing, an operator has to add the four by hand:
+the **Permissions** action on the plugin's row in **Administration → Plugins**,
+or `PUT /api/admin/plugins/files/permissions`. While the panel's
+`PLUGINS_PERMISSIONS_ENFORCE` is off the missing grants are only reported — the
+plugin names them in the log at load, and the admin dialog shows them; once
+enforcement is on, the node calls above are refused.
 
 ## API
 
