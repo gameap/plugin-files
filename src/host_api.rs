@@ -186,6 +186,11 @@ pub trait HostApi {
     /// Wall-clock seconds since the Unix epoch (Go `time.Now().Unix()`).
     fn now_unix(&mut self) -> i64;
 
+    /// The permissions the operator granted this plugin, read live from the
+    /// panel. An `Err` means the question could not be asked at all, which is
+    /// not the same answer as an empty set.
+    fn plugin_grants(&mut self) -> HostResult<Vec<String>>;
+
     fn log_info(&mut self, message: &str);
     fn log_warn(&mut self, message: &str);
     fn log_error(&mut self, message: &str);
@@ -198,7 +203,7 @@ mod wasm {
     use gameap_plugin_sdk::host;
     use gameap_plugin_sdk::proto::gameap::DaemonTaskType;
     use gameap_plugin_sdk::proto::gameap::plugin::sdk::{
-        crypto, daemontasks, nodecmd, nodefs, nodes, servers, storage,
+        crypto, daemontasks, host as hostpb, nodecmd, nodefs, nodes, servers, storage,
     };
 
     use super::*;
@@ -483,6 +488,16 @@ mod wasm {
                 .unwrap_or(0)
         }
 
+        fn plugin_grants(&mut self) -> HostResult<Vec<String>> {
+            // `get_grants` is the only gameap-host function imported, and on
+            // purpose: an import the panel does not export makes the whole
+            // module fail to load, and `get_config` / `report_status` are not
+            // in every panel that has the module.
+            let resp = host::host::get_grants(&hostpb::GetGrantsRequest {}).map_err(call_err)?;
+
+            Ok(resp.permissions)
+        }
+
         fn log_info(&mut self, message: &str) {
             host::log::info(message);
         }
@@ -532,6 +547,11 @@ pub mod mock {
         /// (password, params) per argon2_hash call.
         pub hash_calls: Vec<(String, Argon2Params)>,
         pub now: i64,
+        /// What `plugin_grants` answers; empty means "nothing granted", which
+        /// is a different thing from `plugin_grants_error` ("cannot tell").
+        pub plugin_grants: Vec<String>,
+        /// When set, `plugin_grants` fails — the host could not answer at all.
+        pub plugin_grants_error: Option<String>,
         pub logs: Vec<String>,
     }
 
@@ -553,6 +573,8 @@ pub mod mock {
                 random_calls: Vec::new(),
                 hash_calls: Vec::new(),
                 now: 1_700_000_000,
+                plugin_grants: Vec::new(),
+                plugin_grants_error: None,
                 logs: Vec::new(),
             }
         }
@@ -804,6 +826,13 @@ pub mod mock {
 
         fn now_unix(&mut self) -> i64 {
             self.now
+        }
+
+        fn plugin_grants(&mut self) -> HostResult<Vec<String>> {
+            match &self.plugin_grants_error {
+                Some(err) => Err(HostApiError::Call(err.clone())),
+                None => Ok(self.plugin_grants.clone()),
+            }
         }
 
         fn log_info(&mut self, message: &str) {
