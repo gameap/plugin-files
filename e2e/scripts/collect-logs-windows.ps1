@@ -12,9 +12,15 @@ $apiUrl = if ($env:E2E_API_BASE_URL) { $env:E2E_API_BASE_URL } else { 'http://12
 
 New-Item -ItemType Directory -Force -Path $Out | Out-Null
 
+# The local preference makes a missing path a terminating error, so the reason
+# lands inside the artifact instead of as red noise in the job log.
 function Save([string]$Name, [scriptblock]$Body) {
-  try { & $Body | Out-File -FilePath (Join-Path $Out $Name) -Encoding utf8 } catch {
-    $_.Exception.Message | Out-File -FilePath (Join-Path $Out $Name) -Encoding utf8
+  $path = Join-Path $Out $Name
+  try {
+    $ErrorActionPreference = 'Stop'
+    & $Body | Out-File -FilePath $path -Encoding utf8
+  } catch {
+    $_.Exception.Message | Out-File -FilePath $path -Encoding utf8
   }
 }
 
@@ -50,3 +56,7 @@ try {
 
 Write-Host "collected into ${Out}:"
 Get-ChildItem -Path $Out | Format-Table -AutoSize
+
+# Diagnostics must never fail the job. sc.exe above leaves its exit code in
+# $LASTEXITCODE, which the pwsh step would otherwise exit with.
+exit 0

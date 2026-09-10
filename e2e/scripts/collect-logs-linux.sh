@@ -46,3 +46,6 @@ fi
 
 echo "collected into ${OUT}:"
 ls -l "${OUT}" || true
+
+# Diagnostics must never fail the job.
+exit 0

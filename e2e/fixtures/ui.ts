@@ -5,8 +5,10 @@ import { env, PLUGIN_ID } from './env';
 // matcher covers English, Russian and the raw key — the same convention the
 // panel's own e2e fixtures use.
 const SIGN_IN = /sign.?in|login|вход|войти|auth\.sign_in/i;
+const UPLOAD = /upload|загруз|plugins\.upload/i;
 const VALIDATE = /validate|проверить|plugins\.validate/i;
 const CONFIRM = /delete|удалить|yes|да/i;
+const CLOSE = /close|закрыть|main\.close/i;
 
 // The server page mirrors its active tab in the location hash, and a plugin tab
 // is named plugin-<pluginId>-<slotName>.
@@ -33,6 +35,19 @@ export async function loginViaUI(page: Page): Promise<void> {
     .toBeTruthy();
 }
 
+// naive-ui's notification $dialog blocks the page until its single Close action
+// is used. Scoped to the top-most dialog so a card-header close elsewhere on the
+// page cannot match.
+export async function dismissTopDialog(page: Page): Promise<void> {
+  const close = page
+    .getByRole('dialog')
+    .last()
+    .getByRole('button', { name: CLOSE });
+  await expect(close).toBeVisible({ timeout: 10_000 });
+  await close.click();
+  await expect(close).toBeHidden({ timeout: 10_000 });
+}
+
 // naive-ui renders its dialog in a portal; scope to the top-most one so an
 // unrelated close button elsewhere on the page cannot match.
 export async function confirmDialog(page: Page): Promise<void> {
@@ -49,9 +64,11 @@ export async function uploadPluginViaUI(
   wasmPath: string,
 ): Promise<void> {
   await page.goto('/admin/plugins');
+  await page.getByRole('button', { name: UPLOAD }).first().click();
 
-  await page.getByRole('button', { name: /upload|загруз|plugins\.upload/i }).first().click();
-
+  // Only one dialog is open at this point, so `last()` is unambiguous here —
+  // but not after the install, which is why the assertions below are anchored
+  // on content of the upload modal instead.
   const modal = page.getByRole('dialog').last();
   await expect(modal).toBeVisible();
 
@@ -60,11 +77,25 @@ export async function uploadPluginViaUI(
   await modal.locator('input[type="file"]').setInputFiles(wasmPath);
   await modal.getByRole('button', { name: VALIDATE }).click();
 
-  await expect(modal.getByTestId('dry-run-permissions')).toBeVisible({
-    timeout: 60_000,
-  });
-  await modal.getByTestId('upload-install-button').click();
-  await expect(modal).toBeHidden({ timeout: 60_000 });
+  const permissions = page.getByTestId('dry-run-permissions');
+  await expect(permissions).toBeVisible({ timeout: 60_000 });
+
+  const installed = page.waitForResponse(
+    (response) =>
+      response.url().includes('/api/admin/plugins/upload/install') &&
+      response.request().method() === 'POST',
+  );
+  await page.getByTestId('upload-install-button').click();
+
+  const response = await installed;
+  expect(response.ok(), `install: ${response.status()} ${await response.text()}`)
+    .toBe(true);
+
+  // Installing closes the upload modal and stacks a success $dialog on top of
+  // the page, so waiting on whichever dialog is last would wait on that one
+  // forever.
+  await expect(permissions).toBeHidden({ timeout: 60_000 });
+  await dismissTopDialog(page);
 }
 
 export function nodeCard(page: Page, nodeId: number): Locator {
