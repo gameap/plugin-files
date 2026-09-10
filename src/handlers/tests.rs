@@ -952,6 +952,40 @@ fn admin_nodes_lists_status_per_node() {
 }
 
 #[test]
+fn admin_nodes_finish_an_install_whose_event_was_lost() {
+    let mut host = MockHost::standard();
+    dispatch(&mut host, &request("POST", "/nodes/1/setup", b""));
+
+    // The task finished but no DAEMON_TASK_COMPLETED arrived, so storage still
+    // says installing. Reading it raw would leave the card there for good.
+    host.set_task_state(102, TaskStatus::Success, "done");
+    host.push_result("gameap-files version 1.0.0", 0);
+
+    let (status, body) = dispatch(&mut host, &request("GET", "/admin/nodes", b""));
+    assert_eq!(status, 200);
+    assert_eq!(body["nodes"][0]["plugin_status"]["status"], "installed");
+    assert_eq!(body["nodes"][0]["plugin_status"]["version"], "1.0.0");
+    assert_eq!(
+        store::get_status(&mut host, 1).unwrap().unwrap().status,
+        SetupStatus::Installed
+    );
+}
+
+#[test]
+fn admin_nodes_do_not_probe_a_node_without_a_record() {
+    let mut host = MockHost::standard();
+
+    let (status, body) = dispatch(&mut host, &request("GET", "/admin/nodes", b""));
+    assert_eq!(status, 200);
+    assert_eq!(body["nodes"][0]["plugin_status"], json!({"status": "not_installed"}));
+    assert!(
+        host.commands.is_empty(),
+        "listing must not run a version probe per node: {:?}",
+        host.commands
+    );
+}
+
+#[test]
 fn admin_users_groups_and_filters() {
     let mut host = MockHost::standard();
     host.nodes.insert(

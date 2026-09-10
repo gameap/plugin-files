@@ -1,6 +1,9 @@
-import { ref } from 'vue';
+import { ref, onUnmounted } from 'vue';
 import { adminApi, nodesApi, showApiError } from '@/api';
 import type { AdminNode, NodeSetupConfig, NodeConfigResponse } from '@/types';
+
+/** Matches the interval useNodeStatus polls with on the server tab. */
+const POLL_INTERVAL_MS = 5000;
 
 export function useAdminNodes() {
   const nodes = ref<AdminNode[]>([]);
@@ -12,6 +15,15 @@ export function useAdminNodes() {
   const nodeConfig = ref<NodeConfigResponse | null>(null);
   const configLoading = ref(false);
 
+  let pollInterval: ReturnType<typeof setInterval> | null = null;
+
+  function stopPolling() {
+    if (pollInterval) {
+      clearInterval(pollInterval);
+      pollInterval = null;
+    }
+  }
+
   async function fetchNodes() {
     loading.value = true;
     error.value = null;
@@ -19,6 +31,19 @@ export function useAdminNodes() {
     try {
       const response = await adminApi.getNodes();
       nodes.value = response.data.nodes;
+
+      // An installation is a chain of daemon tasks that finishes without the
+      // page asking, so the list keeps refreshing itself while any node is
+      // mid-install. Without this the card sits on "Installing" until someone
+      // presses Refresh.
+      const installing = nodes.value.some(
+        (node) => node.plugin_status?.status === 'installing'
+      );
+      if (installing && !pollInterval) {
+        pollInterval = setInterval(fetchNodes, POLL_INTERVAL_MS);
+      } else if (!installing) {
+        stopPolling();
+      }
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Failed to fetch nodes';
     } finally {
@@ -73,6 +98,8 @@ export function useAdminNodes() {
       configLoading.value = false;
     }
   }
+
+  onUnmounted(stopPolling);
 
   return {
     nodes,

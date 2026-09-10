@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use crate::domain::{FtpUser, NodeSetupStatus, SetupStatus};
 use crate::host_api::HostApi;
 use crate::http::ApiError;
-use crate::services::store;
+use crate::services::{node_setup, store};
 
 pub struct AdminNode {
     pub id: u64,
@@ -45,8 +45,11 @@ pub fn list_all_nodes<H: HostApi>(host: &mut H) -> Result<Vec<AdminNode>, ApiErr
     let nodes = host.find_nodes()?;
     let mut result = Vec::with_capacity(nodes.len());
     for node in nodes {
+        // A node with nothing recorded is reported as not installed rather
+        // than probed: node_setup::get_status would run a command on every such
+        // node on every load of this page.
         let status = match store::get_status(host, node.id) {
-            Ok(Some(status)) => status,
+            Ok(Some(status)) => node_setup::advance_installing(host, node.id, status),
             Ok(None) => NodeSetupStatus::new(SetupStatus::NotInstalled),
             Err(err) => {
                 host.log_warn(&format!(

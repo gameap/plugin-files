@@ -285,48 +285,64 @@ pub fn get_status<H: HostApi>(
     host: &mut H,
     node_id: u64,
 ) -> Result<Option<NodeSetupStatus>, ApiError> {
-    let Some(mut status) = store::get_status(host, node_id)? else {
+    let Some(status) = store::get_status(host, node_id)? else {
         // Nothing recorded — probe the node directly (result is not saved).
         return check_installation(host, node_id).map(Some);
     };
 
-    if status.status == SetupStatus::Installing && status.task_id != 0 {
-        let now = host.now_unix();
+    Ok(Some(advance_installing(host, node_id, status)))
+}
 
-        match check_daemon_task(host, node_id, status.task_id) {
-            Err(err) => host.log_warn(&format!("failed to check task status: {}", err.message)),
-            Ok(Some(new_status)) => {
-                return Ok(Some(complete_installation(host, node_id, new_status)));
-            }
-            Ok(None) => {}
-        }
-
-        // Task still in progress — enforce the timeout. Legacy docs written
-        // before started_at existed fall back to last_check.
-        let started_at = if status.started_at != 0 {
-            status.started_at
-        } else {
-            status.last_check
-        };
-        if now - started_at >= INSTALLING_TIMEOUT_SECS {
-            host.log_warn(&format!(
-                "installation timeout: node_id={node_id} task_id={} elapsed={}s",
-                status.task_id,
-                now - started_at
-            ));
-            status = NodeSetupStatus {
-                status: SetupStatus::Failed,
-                task_id: status.task_id,
-                error_message: "installation timed out - event may have been lost".into(),
-                last_check: now,
-                started_at,
-                ..NodeSetupStatus::new(SetupStatus::Failed)
-            };
-            store::save_status(host, node_id, &status).ok();
-        }
+/// Moves a stored `installing` record forward when its task has reached a
+/// terminal state or the timeout has passed, and returns every other status
+/// untouched.
+///
+/// This is the fallback for a lost DAEMON_TASK_COMPLETED event, and the reason
+/// the admin listing calls it too: reading storage alone would leave such a
+/// node on "installing" forever, with Refresh re-reading the same record. The
+/// only host call it makes for a node that is not mid-install is none at all.
+pub fn advance_installing<H: HostApi>(
+    host: &mut H,
+    node_id: u64,
+    mut status: NodeSetupStatus,
+) -> NodeSetupStatus {
+    if status.status != SetupStatus::Installing || status.task_id == 0 {
+        return status;
     }
 
-    Ok(Some(status))
+    let now = host.now_unix();
+
+    match check_daemon_task(host, node_id, status.task_id) {
+        Err(err) => host.log_warn(&format!("failed to check task status: {}", err.message)),
+        Ok(Some(new_status)) => return complete_installation(host, node_id, new_status),
+        Ok(None) => {}
+    }
+
+    // Task still in progress — enforce the timeout. Legacy docs written
+    // before started_at existed fall back to last_check.
+    let started_at = if status.started_at != 0 {
+        status.started_at
+    } else {
+        status.last_check
+    };
+    if now - started_at >= INSTALLING_TIMEOUT_SECS {
+        host.log_warn(&format!(
+            "installation timeout: node_id={node_id} task_id={} elapsed={}s",
+            status.task_id,
+            now - started_at
+        ));
+        status = NodeSetupStatus {
+            status: SetupStatus::Failed,
+            task_id: status.task_id,
+            error_message: "installation timed out - event may have been lost".into(),
+            last_check: now,
+            started_at,
+            ..NodeSetupStatus::new(SetupStatus::Failed)
+        };
+        store::save_status(host, node_id, &status).ok();
+    }
+
+    status
 }
 
 /// Persists the outcome of an installation. A successful one also pushes

@@ -11,7 +11,7 @@ import {
   getDaemonTask,
   getDaemonTaskOutput,
 } from '../fixtures/panel';
-import { nodeStatus } from '../fixtures/plugin';
+import { nodeStatus, type NodeStatus } from '../fixtures/plugin';
 import { writeState } from '../fixtures/state';
 import { fillNumber, nodeStatusTag, loginViaUI, openFilesAdmin } from '../fixtures/ui';
 import { readScalar } from '../fixtures/yaml';
@@ -75,10 +75,21 @@ test('Install on the node card runs the installer to completion', async ({
       response.request().method() === 'POST',
   );
   await modal.getByTestId('node-setup-submit').click();
-  expect((await started).status()).toBe(200);
 
-  // The admin page does not poll on its own, so the wait runs against the API
-  // and the UI is re-checked once a terminal state is reached.
+  const setupResponse = await started;
+  expect(setupResponse.status()).toBe(200);
+
+  // The task ids are only in the status while the install is running: a
+  // successful completion replaces the record with a fresh version probe that
+  // carries none, exactly as the Go plugin this one is compatible with did.
+  const pending = (await setupResponse.json()) as NodeStatus;
+  expect(pending.status).toBe('installing');
+  const installTaskId = pending.task_id;
+  expect(installTaskId, 'the setup response carries the install task id')
+    .toBeTruthy();
+
+  // The API is the source of truth for when the install finished; the card is
+  // checked separately below, without touching Refresh.
   let last = await nodeStatus(request, token, node.id);
   const deadline = Date.now() + INSTALL_DEADLINE_MS;
   while (last.status === 'installing' && Date.now() < deadline) {
@@ -86,9 +97,7 @@ test('Install on the node card runs the installer to completion', async ({
     last = await nodeStatus(request, token, node.id);
   }
 
-  if (last.task_id) {
-    await attachTaskOutput(request, token, last.task_id, testInfo);
-  }
+  await attachTaskOutput(request, token, installTaskId as number, testInfo);
 
   expect(
     last.status,
@@ -104,12 +113,15 @@ test('Install on the node card runs the installer to completion', async ({
     contentType: 'application/json',
   });
 
-  expect(last.task_id, 'the status keeps the install task id').toBeTruthy();
-  const task = await getDaemonTask(request, token, last.task_id as number);
+  const task = await getDaemonTask(request, token, installTaskId as number);
   expect(task.status).toBe('success');
 
-  await page.getByTestId('ftp-nodes-refresh').click();
-  await expect(nodeStatusTag(page, node.id)).toContainText(last.version ?? '');
+  // No Refresh click on purpose: the admin page polls while a node is
+  // installing, and a card stuck on "Installing" until an operator refreshes by
+  // hand is the regression this asserts against.
+  await expect(nodeStatusTag(page, node.id)).toContainText(last.version ?? '', {
+    timeout: 30_000,
+  });
 });
 
 test('gameap-files runs on the node as a service', () => {
