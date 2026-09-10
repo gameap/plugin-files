@@ -83,7 +83,7 @@ const columns = computed<DataTableColumns<FtpUser>>(() => {
       title: trans('username'),
       key: 'username',
       render: (row) =>
-        h('div', { class: 'flex flex-col min-w-0' }, [
+        h('div', { class: 'flex flex-col min-w-0', 'data-testid': `ftp-user-row-${row.username}` }, [
           h('span', { class: 'font-medium text-stone-800 dark:text-stone-100' }, row.username),
           row.description
             ? h('span', { class: 'text-xs text-stone-500 dark:text-stone-400 truncate' }, row.description)
@@ -129,7 +129,12 @@ const columns = computed<DataTableColumns<FtpUser>>(() => {
         h('div', { class: 'flex gap-1 justify-end' }, [
           h(
             GButton,
-            { color: 'blue', size: 'small', onClick: () => emit('edit', row) },
+            {
+              color: 'blue',
+              size: 'small',
+              'data-testid': `ftp-user-edit-${row.username}`,
+              onClick: () => emit('edit', row),
+            },
             () => [
               h(GIcon, { name: 'edit' }),
               h('span', { class: 'hidden lg:inline ml-1' }, trans('edit')),
@@ -137,7 +142,12 @@ const columns = computed<DataTableColumns<FtpUser>>(() => {
           ),
           h(
             GButton,
-            { color: 'red', size: 'small', onClick: () => emit('delete', row) },
+            {
+              color: 'red',
+              size: 'small',
+              'data-testid': `ftp-user-delete-${row.username}`,
+              onClick: () => emit('delete', row),
+            },
             () => [
               h(GIcon, { name: 'delete' }),
               h('span', { class: 'hidden lg:inline ml-1' }, trans('delete')),

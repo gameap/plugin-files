@@ -1,0 +1,119 @@
+name: Build files.wasm
+description: >
+  Checks out the sibling repositories the path dependencies need, builds the
+  plugin SDK, the frontend and the wasm module. Leaves files.wasm in the plugin
+  directory.
+
+inputs:
+  gameap-ref:
+    description: Ref of gameap/gameap providing web/plugin-sdk
+    required: true
+  gameap-proto-ref:
+    description: Ref of gameap/gameap-proto providing rust/gameap-plugin-sdk
+    required: true
+  plugin-path:
+    description: Directory this repository is checked out into
+    required: false
+    default: plugin-files
+  run-tests:
+    description: Run cargo test and the frontend test suite
+    required: false
+    default: 'true'
+  run-lint:
+    description: Run clippy and the frontend typecheck
+    required: false
+    default: 'true'
+
+runs:
+  using: composite
+  steps:
+    # The frontend depends on file:../../gameap-api/web/plugin-sdk, so the
+    # gameap repo must be checked out as a sibling directory named gameap-api
+    - uses: actions/checkout@v4
+      with:
+        repository: gameap/gameap
+        ref: ${{ inputs.gameap-ref }}
+        path: gameap-api
+
+    # Cargo.toml depends on path = "../gameap-proto/rust/gameap-plugin-sdk"
+    - uses: actions/checkout@v4
+      with:
+        repository: gameap/gameap-proto
+        ref: ${{ inputs.gameap-proto-ref }}
+        path: gameap-proto
+
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: npm
+        cache-dependency-path: |
+          gameap-api/web/plugin-sdk/package-lock.json
+          ${{ inputs.plugin-path }}/frontend/package-lock.json
+
+    # The @gameap/ui tarball on npm is missing its icons/ directory, so the
+    # package from the gameap checkout is installed over it. That package
+    # ships no type declarations, so the tsc half of the SDK's "npm run
+    # build" fails on the '@gameap/ui' re-export; the ambient shim types it
+    # as `any` so tsc can emit dist/*.d.ts — without them the frontend
+    # typecheck hits TS7016 on every '@gameap/plugin-sdk' import.
+    - name: Build plugin SDK
+      shell: bash
+      working-directory: gameap-api/web/plugin-sdk
+      run: |
+        npm ci
+        npm install --no-save ../frontend/packages/gameap-ui
+        echo "declare module '@gameap/ui';" > src/gameap-ui-shim.d.ts
+        npx vite build
+        npx tsc --emitDeclarationOnly
+
+    - name: Build frontend
+      shell: bash
+      working-directory: ${{ inputs.plugin-path }}/frontend
+      run: |
+        npm ci
+        npm run build
+
+    - name: Typecheck frontend
+      if: inputs.run-lint == 'true'
+      shell: bash
+      working-directory: ${{ inputs.plugin-path }}/frontend
+      run: npm run typecheck
+
+    - name: Test frontend
+      if: inputs.run-tests == 'true'
+      shell: bash
+      working-directory: ${{ inputs.plugin-path }}/frontend
+      run: npm test
+
+    # Installs the toolchain and targets pinned in rust-toolchain.toml
+    - name: Set up Rust
+      shell: bash
+      working-directory: ${{ inputs.plugin-path }}
+      run: rustup toolchain install
+
+    - uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: ${{ inputs.plugin-path }}
+
+    - name: Test
+      if: inputs.run-tests == 'true'
+      shell: bash
+      working-directory: ${{ inputs.plugin-path }}
+      run: cargo test
+
+    - name: Clippy
+      if: inputs.run-lint == 'true'
+      shell: bash
+      working-directory: ${{ inputs.plugin-path }}
+      run: |
+        cargo clippy --target wasm32-wasip1 -- -D warnings
+        cargo clippy --all-targets -- -D warnings
+
+    - name: Install binaryen
+      shell: bash
+      run: sudo apt-get update && sudo apt-get install -y binaryen
+
+    - name: Build wasm
+      shell: bash
+      working-directory: ${{ inputs.plugin-path }}
+      run: make wasm

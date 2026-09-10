@@ -3,6 +3,7 @@
     <FormField :label="trans('ssh_public_key')" :hint="trans('ssh_key_hint')">
       <n-input
         v-model:value="newKey"
+        :input-props="{ 'data-testid': 'ssh-key-input' }"
         type="textarea"
         :rows="4"
         :placeholder="trans('ssh_key_placeholder')"
@@ -14,6 +15,7 @@
         {{ trans('cancel') }}
       </GButton>
       <GButton
+        data-testid="ssh-key-submit"
         type="button"
         color="green"
         :disabled="!isValid"

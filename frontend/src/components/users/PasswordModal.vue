@@ -25,7 +25,10 @@
           {{ trans('password') }}
         </div>
         <div class="flex items-center gap-2">
-          <div class="flex-1 p-3 bg-stone-100 dark:bg-stone-700 rounded-md font-mono text-stone-900 dark:text-white">
+          <div
+            class="flex-1 p-3 bg-stone-100 dark:bg-stone-700 rounded-md font-mono text-stone-900 dark:text-white"
+            data-testid="ftp-user-generated-password"
+          >
             {{ password }}
           </div>
           <GButton color="white" size="small" @click="copyPassword">
@@ -38,7 +41,7 @@
 
     <template #footer>
       <div class="flex justify-end">
-        <GButton color="green" @click="emit('update:modelValue', false)">
+        <GButton data-testid="ftp-password-close" color="green" @click="emit('update:modelValue', false)">
           <GIcon name="check" />
           <span class="hidden lg:inline ml-1">{{ trans('close') }}</span>
         </GButton>

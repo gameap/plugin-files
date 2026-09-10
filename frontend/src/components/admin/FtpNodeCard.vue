@@ -1,5 +1,6 @@
 <template>
   <n-card
+    :data-testid="`ftp-node-card-${node.id}`"
     size="small"
     :bordered="true"
     :segmented="{ content: true }"
@@ -15,19 +16,40 @@
     </template>
 
     <template #header-extra>
-      <n-tag v-if="status === 'installed'" type="success" size="small" round :bordered="false">
+      <n-tag
+        v-if="status === 'installed'"
+        :data-testid="`ftp-node-status-${node.id}`"
+        type="success"
+        size="small"
+        round
+        :bordered="false"
+      >
         {{ node.plugin_status?.version || trans('installed_short') }}
       </n-tag>
-      <n-tag v-else-if="status === 'installing'" type="info" size="small" round :bordered="false">
+      <n-tag
+        v-else-if="status === 'installing'"
+        :data-testid="`ftp-node-status-${node.id}`"
+        type="info"
+        size="small"
+        round
+        :bordered="false"
+      >
         <template #icon>
           <GIcon name="spinner" />
         </template>
         {{ trans('installing') }}
       </n-tag>
-      <n-tag v-else-if="status === 'failed'" type="error" size="small" round :bordered="false">
+      <n-tag
+        v-else-if="status === 'failed'"
+        :data-testid="`ftp-node-status-${node.id}`"
+        type="error"
+        size="small"
+        round
+        :bordered="false"
+      >
         {{ trans('failed_short') }}
       </n-tag>
-      <n-tag v-else size="small" round :bordered="false">
+      <n-tag v-else :data-testid="`ftp-node-status-${node.id}`" size="small" round :bordered="false">
         {{ trans('not_installed_short') }}
       </n-tag>
     </template>
@@ -47,6 +69,7 @@
     <div class="flex flex-wrap gap-2">
       <GButton
         v-if="status === 'not_installed' || status === 'failed'"
+        :data-testid="`ftp-node-install-${node.id}`"
         color="green"
         size="small"
         :loading="isOperating"
@@ -57,11 +80,12 @@
       </GButton>
 
       <template v-if="status === 'installed'">
-        <GButton color="white" size="small" @click="goToUsers">
+        <GButton :data-testid="`ftp-node-users-${node.id}`" color="white" size="small" @click="goToUsers">
           <GIcon name="users" />
           <span class="ml-1">{{ trans('view_users') }}</span>
         </GButton>
         <GButton
+          :data-testid="`ftp-node-update-${node.id}`"
           color="white"
           size="small"
           :loading="isOperating"
@@ -71,7 +95,13 @@
           <GIcon name="sync" />
           <span class="ml-1">{{ trans('update_installation') }}</span>
         </GButton>
-        <GButton color="white" size="small" :loading="isOperating" @click="emit('configure', node.id)">
+        <GButton
+          :data-testid="`ftp-node-settings-${node.id}`"
+          color="white"
+          size="small"
+          :loading="isOperating"
+          @click="emit('configure', node.id)"
+        >
           <GIcon name="settings" />
           <span class="ml-1">{{ trans('settings') }}</span>
         </GButton>

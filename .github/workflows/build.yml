@@ -28,85 +28,39 @@ jobs:
         with:
           path: plugin-files
 
-      # The frontend depends on file:../../gameap-api/web/plugin-sdk, so the
-      # gameap repo must be checked out as a sibling directory named gameap-api
-      - uses: actions/checkout@v4
+      - uses: ./plugin-files/.github/actions/build-wasm
         with:
-          repository: gameap/gameap
-          ref: ${{ env.GAMEAP_REF }}
-          path: gameap-api
-
-      # Cargo.toml depends on path = "../gameap-proto/rust/gameap-plugin-sdk"
-      - uses: actions/checkout@v4
-        with:
-          repository: gameap/gameap-proto
-          ref: ${{ env.GAMEAP_PROTO_REF }}
-          path: gameap-proto
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: |
-            gameap-api/web/plugin-sdk/package-lock.json
-            plugin-files/frontend/package-lock.json
-
-      # The @gameap/ui tarball on npm is missing its icons/ directory, so the
-      # package from the gameap checkout is installed over it. That package
-      # ships no type declarations, so the tsc half of the SDK's "npm run
-      # build" fails on the '@gameap/ui' re-export; the ambient shim types it
-      # as `any` so tsc can emit dist/*.d.ts — without them the frontend
-      # typecheck hits TS7016 on every '@gameap/plugin-sdk' import.
-      - name: Build plugin SDK
-        working-directory: gameap-api/web/plugin-sdk
-        run: |
-          npm ci
-          npm install --no-save ../frontend/packages/gameap-ui
-          echo "declare module '@gameap/ui';" > src/gameap-ui-shim.d.ts
-          npx vite build
-          npx tsc --emitDeclarationOnly
-
-      - name: Build frontend
-        working-directory: plugin-files/frontend
-        run: |
-          npm ci
-          npm run build
-
-      - name: Typecheck frontend
-        working-directory: plugin-files/frontend
-        run: npm run typecheck
-
-      - name: Test frontend
-        working-directory: plugin-files/frontend
-        run: npm test
-
-      # Installs the toolchain and targets pinned in rust-toolchain.toml
-      - name: Set up Rust
-        working-directory: plugin-files
-        run: rustup toolchain install
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: plugin-files
-
-      - name: Test
-        working-directory: plugin-files
-        run: cargo test
-
-      - name: Clippy
-        working-directory: plugin-files
-        run: |
-          cargo clippy --target wasm32-wasip1 -- -D warnings
-          cargo clippy --all-targets -- -D warnings
-
-      - name: Install binaryen
-        run: sudo apt-get update && sudo apt-get install -y binaryen
-
-      - name: Build wasm
-        working-directory: plugin-files
-        run: make wasm
+          gameap-ref: ${{ env.GAMEAP_REF }}
+          gameap-proto-ref: ${{ env.GAMEAP_PROTO_REF }}
+          plugin-path: plugin-files
 
       - uses: actions/upload-artifact@v4
         with:
           name: files-wasm
           path: plugin-files/files.wasm
+
+  # The e2e suite itself only runs nightly, so this compiles it on every change
+  # to keep it from rotting in between.
+  e2e-compile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+
+      - name: Compile the e2e suite
+        working-directory: e2e
+        env:
+          E2E_ADMIN_PASSWORD: compile-only
+          E2E_NODE_OS: linux
+          E2E_NODE_HOST: 127.0.0.1
+          E2E_NODE_WORK_PATH: /srv/gameap
+          E2E_WASM_PATH: /dev/null
+        run: |
+          npm ci
+          npx tsc --noEmit
+          npx playwright test --list

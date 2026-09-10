@@ -35,7 +35,7 @@
     />
 
     <div v-if="!disabled && !showAddForm" class="flex justify-center">
-      <GButton size="small" color="white" @click="showAddForm = true">
+      <GButton data-testid="ssh-key-add" size="small" color="white" @click="showAddForm = true">
         <GIcon name="add" />
         <span class="hidden lg:inline ml-1">{{ trans('add_key') }}</span>
       </GButton>

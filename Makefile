@@ -2,7 +2,7 @@ PLUGIN_NAME = files
 CRATE_WASM  = target/wasm32-wasip1/release/files.wasm
 WASM_OUT    = $(PLUGIN_NAME).wasm
 
-.PHONY: all build frontend wasm test lint clean sign verify release info
+.PHONY: all build frontend wasm test lint clean sign verify release info e2e-deps e2e
 
 all: build
 
@@ -30,6 +30,13 @@ lint:
 	cargo clippy --all-targets -- -D warnings
 	cd frontend && npm run typecheck
 
+e2e-deps:
+	cd e2e && npm ci && npx playwright install --with-deps chromium
+
+# Needs a running panel and a provisioned node; see e2e/README.md.
+e2e:
+	cd e2e && npx playwright test
+
 sign:
 	@if [ -n "$(GPG_KEY)" ]; then \
 		gpg --detach-sign --armor --local-user $(GPG_KEY) $(WASM_OUT); \
@@ -46,6 +53,7 @@ clean:
 	cargo clean
 	rm -f $(WASM_OUT) $(WASM_OUT).asc
 	rm -rf frontend/dist
+	rm -rf e2e/playwright-report e2e/test-results
 
 info:
 	@echo "Plugin:  $(PLUGIN_NAME)"

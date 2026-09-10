@@ -13,12 +13,16 @@
 
         <div class="space-y-3">
           <FormField :label="trans('ftp_address')" :hint="trans('ftp_address_hint')">
-            <n-input v-model:value="config.ftp.address" />
+            <n-input
+              v-model:value="config.ftp.address"
+              :input-props="{ 'data-testid': 'node-setup-ftp-address' }"
+            />
           </FormField>
 
           <FormField :label="trans('ftp_port')">
             <n-input-number
               v-model:value="config.ftp.port"
+              :input-props="{ 'data-testid': 'node-setup-ftp-port' }"
               placeholder="21"
               :min="1"
               :max="65535"
@@ -31,6 +35,7 @@
             <FormField :label="trans('passive_port_min')">
               <n-input-number
                 v-model:value="config.ftp.passive_port_min"
+                :input-props="{ 'data-testid': 'node-setup-passive-min' }"
                 placeholder="30000"
                 :min="1"
                 :max="65535"
@@ -41,6 +46,7 @@
             <FormField :label="trans('passive_port_max')">
               <n-input-number
                 v-model:value="config.ftp.passive_port_max"
+                :input-props="{ 'data-testid': 'node-setup-passive-max' }"
                 placeholder="30100"
                 :min="1"
                 :max="65535"
@@ -51,16 +57,20 @@
           </div>
 
           <FormField :label="trans('public_host')" :hint="trans('public_host_hint')">
-            <n-input v-model:value="config.ftp.public_host" />
+            <n-input
+              v-model:value="config.ftp.public_host"
+              :input-props="{ 'data-testid': 'node-setup-public-host' }"
+            />
           </FormField>
 
-          <n-checkbox v-model:checked="config.ftp.tls_enabled">
+          <n-checkbox v-model:checked="config.ftp.tls_enabled" data-testid="node-setup-tls-enabled">
             {{ trans('enable_tls') }}
           </n-checkbox>
 
           <FormField v-if="config.ftp.tls_enabled" :label="trans('tls_implicit_port')">
             <n-input-number
               v-model:value="config.ftp.tls_implicit_port"
+              :input-props="{ 'data-testid': 'node-setup-tls-port' }"
               placeholder="990"
               :min="1"
               :max="65535"
@@ -80,6 +90,7 @@
         <FormField :label="trans('sftp_port')">
           <n-input-number
             v-model:value="config.sftp.port"
+            :input-props="{ 'data-testid': 'node-setup-sftp-port' }"
             placeholder="2222"
             :min="1"
             :max="65535"
@@ -92,10 +103,15 @@
 
     <template #footer>
       <div class="flex justify-end gap-2">
-        <GButton color="white" :disabled="loading" @click="emit('update:modelValue', false)">
+        <GButton
+          data-testid="node-setup-cancel"
+          color="white"
+          :disabled="loading"
+          @click="emit('update:modelValue', false)"
+        >
           {{ trans('cancel') }}
         </GButton>
-        <GButton color="green" :loading="loading" @click="handleSubmit">
+        <GButton data-testid="node-setup-submit" color="green" :loading="loading" @click="handleSubmit">
           <GIcon :name="mode === 'configure' ? 'save' : 'download'" />
           <span class="ml-1">{{ submitButtonText }}</span>
         </GButton>
