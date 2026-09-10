@@ -28,9 +28,25 @@ export async function call<T>(
 
   return {
     status: response.status(),
-    body: (text ? JSON.parse(text) : null) as T,
+    body: parseBody<T>(text),
     text,
   };
+}
+
+// Not every answer to a plugin route comes from the plugin. Once the plugin is
+// uninstalled the panel's own router answers, and net/http writes a plain-text
+// "404 page not found"; the status is what those cases assert on, so a body
+// that is not JSON is reported as no body rather than as a parse error.
+function parseBody<T>(text: string): T {
+  if (!text) {
+    return null as T;
+  }
+
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    return null as T;
+  }
 }
 
 async function ok<T>(

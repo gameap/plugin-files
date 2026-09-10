@@ -42,15 +42,20 @@ export class WindowsNode implements NodeTarget {
     }
   }
 
+  // Base64 rather than Get-Content: PowerShell terminates whatever it writes to
+  // stdout with a newline of its own and re-encodes it in the console code page,
+  // so a file whose bytes matter comes back one line longer than it is on disk.
   readFile(relative: string): string {
+    const path = quote(this.join(relative));
     const result = this.shell(
-      `Get-Content -LiteralPath ${quote(this.join(relative))} -Raw`,
+      `$ErrorActionPreference = 'Stop'; ` +
+        `[Console]::Out.Write([Convert]::ToBase64String([IO.File]::ReadAllBytes(${path})))`,
     );
     if (result.code !== 0) {
       throw new Error(`cannot read ${relative} on the node: ${result.stderr}`);
     }
 
-    return result.stdout;
+    return Buffer.from(result.stdout.replace(/\s+/g, ''), 'base64').toString('utf8');
   }
 
   exists(relative: string): boolean {
