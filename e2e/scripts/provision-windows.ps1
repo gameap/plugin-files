@@ -1,5 +1,11 @@
 # Brings up the Windows leg: the panel and the node both live on the runner.
-# Exports E2E_NODE_HOST, PANEL_TAG and GAMEAPCTL_TAG through $env:GITHUB_ENV.
+# Exports E2E_NODE_HOST, PANEL_TAG, PANEL_LOG_DIR and GAMEAPCTL_TAG through
+# $env:GITHUB_ENV.
+#
+# Both the panel and the daemon run as services. That is how they run on a real
+# Windows host, and it is also the only way the panel survives: the runner puts
+# every step in a job object that kills the whole tree when the step ends, so a
+# panel started here as a child process would be gone before the suite runs.
 #
 # The daemon is installed by gameapctl for one concrete reason beyond realism:
 # install-files-windows.ps1 registers its service through shawl and does not
@@ -8,10 +14,27 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
 $panelDir = if ($env:PANEL_DIR) { $env:PANEL_DIR } else { 'C:\gameap-e2e\panel' }
-$panelLog = if ($env:PANEL_LOG) { $env:PANEL_LOG } else { 'C:\gameap-e2e\gameap.log' }
+$panelLogDir = if ($env:PANEL_LOG_DIR) { $env:PANEL_LOG_DIR } else { 'C:\gameap-e2e\logs' }
 $apiUrl = if ($env:E2E_API_BASE_URL) { $env:E2E_API_BASE_URL } else { 'http://127.0.0.1:8025' }
 $nodeWorkPath = if ($env:E2E_NODE_WORK_PATH) { $env:E2E_NODE_WORK_PATH } else { 'C:\gameap' }
 $minPanelVersion = [version]'4.5.0'
+$panelService = 'gameap-e2e-panel'
+
+# Its own copy, deliberately not the one under C:\gameap\tools: that one belongs
+# to gameapctl, and the assertion further down has to keep meaning something.
+$shawlVersion = 'v1.7.0'
+$shawlDir = 'C:\gameap-e2e\shawl'
+$shawlExe = Join-Path $shawlDir 'shawl.exe'
+
+# The panel reads its whole configuration from the environment, and a service
+# inherits none of the step's, so these are handed to shawl one by one.
+$panelEnvNames = @(
+  'DATABASE_DRIVER', 'DATABASE_URL', 'AUTH_SECRET', 'ENCRYPTION_KEY',
+  'AUTH_REQUIRE_MFA_FOR_ADMINS', 'HTTP_HOST', 'HTTP_PORT', 'FILES_LOCAL_BASE_PATH',
+  'ADMIN_LOGIN', 'ADMIN_EMAIL', 'ADMIN_PASSWORD', 'GRPC_PORT', 'GRPC_TLS_ENABLED',
+  'GRPC_EXTERNAL_HOST', 'GRPC_EXTERNAL_PORT', 'DAEMON_SETUP_KEY',
+  'PLUGINS_PERMISSIONS_ENFORCE'
+)
 
 function Write-Section([string]$Text) { Write-Host "`n=== $Text" }
 
@@ -23,6 +46,12 @@ function Export-Env([string]$Name, [string]$Value) {
 
 function Get-LatestTag([string]$Repo) {
   return (gh release view --repo $Repo --json tagName -q .tagName).Trim()
+}
+
+function Show-PanelLogs {
+  Get-Service -Name $panelService -ErrorAction SilentlyContinue | Format-List
+  Get-ChildItem -Path $panelLogDir -Filter '*.log' -ErrorAction SilentlyContinue |
+    ForEach-Object { Write-Host "== $($_.FullName)"; Get-Content -LiteralPath $_.FullName -Tail 200 }
 }
 
 Write-Section 'Excluding the working directories from Defender'
@@ -73,12 +102,48 @@ if ($env:PANEL_BINARY) {
 }
 Export-Env 'PANEL_TAG' $panelTag
 
-Write-Section "Starting the panel ($panelTag)"
+Write-Section "Registering the panel as a service ($panelTag)"
 New-Item -ItemType Directory -Force -Path $env:FILES_LOCAL_BASE_PATH | Out-Null
-New-Item -ItemType Directory -Force -Path (Split-Path -Parent $panelLog) | Out-Null
-$panel = Start-Process -FilePath (Join-Path $panelDir 'gameap.exe') -PassThru `
-  -RedirectStandardOutput $panelLog -RedirectStandardError "$panelLog.err"
-$panel.Id | Out-File -FilePath 'C:\gameap-e2e\gameap.pid' -Encoding ascii
+New-Item -ItemType Directory -Force -Path $panelLogDir, $shawlDir | Out-Null
+Export-Env 'PANEL_LOG_DIR' $panelLogDir
+
+# gameap.exe does not speak the Windows service control protocol, so the service
+# is a shawl wrapper — the same arrangement gameapctl installs on a real host.
+$shawlZip = Join-Path $shawlDir 'shawl.zip'
+Invoke-WebRequest -UseBasicParsing -OutFile $shawlZip `
+  -Uri "https://github.com/mtkennerly/shawl/releases/download/$shawlVersion/shawl-$shawlVersion-win64.zip"
+Expand-Archive -LiteralPath $shawlZip -DestinationPath $shawlDir -Force
+if (-not (Test-Path $shawlExe)) {
+  Write-Host "::error::shawl $shawlVersion did not unpack to $shawlExe"
+  exit 1
+}
+
+if (Get-Service -Name $panelService -ErrorAction SilentlyContinue) {
+  & sc.exe delete $panelService | Out-Null
+  Start-Sleep -Seconds 2
+}
+
+$envArgs = @()
+foreach ($name in $panelEnvNames) {
+  $value = [Environment]::GetEnvironmentVariable($name)
+  if ($null -ne $value -and $value -ne '') { $envArgs += @('--env', "$name=$value") }
+}
+
+& $shawlExe add --name $panelService --restart `
+  --cwd $panelDir --log-dir $panelLogDir --log-as gameap --log-rotate daily `
+  @envArgs -- (Join-Path $panelDir 'gameap.exe')
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "::error::shawl add exited with $LASTEXITCODE"
+  exit 1
+}
+
+try {
+  Start-Service -Name $panelService
+} catch {
+  Write-Host "::error::could not start ${panelService}: $($_.Exception.Message)"
+  Show-PanelLogs
+  exit 1
+}
 
 $healthy = $false
 foreach ($attempt in 1..90) {
@@ -92,8 +157,7 @@ foreach ($attempt in 1..90) {
 }
 if (-not $healthy) {
   Write-Host '::error::the panel never became healthy'
-  Get-Content -LiteralPath $panelLog -Tail 200 -ErrorAction SilentlyContinue
-  Get-Content -LiteralPath "$panelLog.err" -Tail 200 -ErrorAction SilentlyContinue
+  Show-PanelLogs
   exit 1
 }
 
@@ -154,7 +218,7 @@ $windowsNode = $nodes | Where-Object { $_.os -eq 'windows' -and $_.enabled }
 if (-not $online -or -not $windowsNode) {
   $detail = if ($null -eq $nodes) { '<no response>' } else { $nodes | ConvertTo-Json -Compress }
   Write-Host "::error::no enabled windows node enrolled: $detail"
-  Get-Content -LiteralPath $panelLog -Tail 200 -ErrorAction SilentlyContinue
+  Show-PanelLogs
   Get-Content -LiteralPath 'C:\gameap\daemon\logs\output.log' -Tail 200 -ErrorAction SilentlyContinue
   exit 1
 }

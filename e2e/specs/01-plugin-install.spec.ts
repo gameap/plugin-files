@@ -82,11 +82,11 @@ test('the wasm-embedded frontend bundle renders the admin page', async ({
   page,
 }) => {
   await loginViaUI(page);
+  // Waits for the page's own Refresh button, which exists only once
+  // /plugins.js delivered the bundle and the route registered.
   await openFilesAdmin(page);
 
-  // Either a node grid or the empty state, but never the router's not-found:
-  // both prove /plugins.js delivered the bundle and the route registered.
-  await expect(
-    page.getByTestId('ftp-nodes-grid').or(page.getByTestId('ftp-nodes-refresh')),
-  ).toBeVisible();
+  // And the node the provisioning enrolled has to reach the grid, which proves
+  // the plugin's API answers too.
+  await expect(page.getByTestId('ftp-nodes-grid')).toBeVisible();
 });
