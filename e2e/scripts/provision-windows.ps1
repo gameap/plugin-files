@@ -44,8 +44,32 @@ function Export-Env([string]$Name, [string]$Value) {
   Set-Item -Path "env:$Name" -Value $Value
 }
 
+# The GitHub release API answers 500 often enough to lose a whole leg to it.
+# Both a thrown native error and a non-zero exit code are treated as a failure,
+# because which of the two happens depends on the pwsh version.
+function Invoke-Gh {
+  param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
+
+  for ($attempt = 1; $attempt -le 3; $attempt++) {
+    $reason = $null
+    try {
+      $output = & gh @Arguments
+      if ($LASTEXITCODE -eq 0) { return ($output -join "`n") }
+      $reason = "exit code $LASTEXITCODE"
+    } catch {
+      $reason = $_.Exception.Message
+    }
+
+    Write-Host "attempt ${attempt} failed for 'gh $($Arguments -join ' ')': ${reason}"
+    if ($attempt -lt 3) { Start-Sleep -Seconds ($attempt * 5) }
+  }
+
+  Write-Host "::error::gh $($Arguments -join ' ') failed after 3 attempts"
+  exit 1
+}
+
 function Get-LatestTag([string]$Repo) {
-  return (gh release view --repo $Repo --json tagName -q .tagName).Trim()
+  return (Invoke-Gh release view --repo $Repo --json tagName -q .tagName).Trim()
 }
 
 function Show-PanelLogs {
@@ -96,7 +120,7 @@ if ($env:PANEL_BINARY) {
     exit 1
   }
 
-  gh release download --repo gameap/gameap $panelTag --dir $panelDir --pattern 'gameap-*-windows-amd64.zip'
+  Invoke-Gh release download --repo gameap/gameap $panelTag --dir $panelDir --pattern 'gameap-*-windows-amd64.zip' | Out-Null
   $zip = Get-ChildItem -Path $panelDir -Filter 'gameap-*-windows-amd64.zip' | Select-Object -First 1
   Expand-Archive -LiteralPath $zip.FullName -DestinationPath $panelDir -Force
 }
@@ -168,7 +192,7 @@ Export-Env 'GAMEAPCTL_TAG' $gameapctlTag
 $ctlDir = 'C:\gameap-e2e\gameapctl'
 Remove-Item -Recurse -Force -LiteralPath $ctlDir -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $ctlDir | Out-Null
-gh release download --repo gameap/gameapctl $gameapctlTag --dir $ctlDir --pattern 'gameapctl-*-windows-amd64.zip'
+Invoke-Gh release download --repo gameap/gameapctl $gameapctlTag --dir $ctlDir --pattern 'gameapctl-*-windows-amd64.zip' | Out-Null
 $ctlZip = Get-ChildItem -Path $ctlDir -Filter 'gameapctl-*-windows-amd64.zip' | Select-Object -First 1
 Expand-Archive -LiteralPath $ctlZip.FullName -DestinationPath $ctlDir -Force
 

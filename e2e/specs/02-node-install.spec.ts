@@ -94,7 +94,9 @@ test('Install on the node card runs the installer to completion', async ({
     last.status,
     `install ended as ${last.status}: ${last.error_message ?? 'no message'}`,
   ).toBe('installed');
-  expect(last.version).toMatch(/^\d+\.\d+\.\d+/);
+  // extract_semver keeps the leading v when the binary prints one, and
+  // `gameap-files version` does.
+  expect(last.version).toMatch(/^v?\d+\.\d+\.\d+/);
 
   writeState({ filesVersion: last.version });
   await testInfo.attach('gameap-files-version', {
@@ -133,7 +135,12 @@ test('the installer wrote the configuration the setup form asked for', () => {
   expect(readScalar(config, 'ftp.passive_port_max')).toBe(String(ports.passiveMax));
   expect(readScalar(config, 'ftp.public_host')).toBe(env.nodeHost);
   expect(readScalar(config, 'sftp.listen_addr')).toBe(`:${ports.sftp}`);
-  expect(readScalar(config, 'server.data_dir')).toBe(node.workPath);
+
+  // The Windows installer writes YAML paths with forward slashes on purpose: a
+  // backslash is an escape character in a double-quoted scalar. Only the
+  // separators are normalised before comparing.
+  const dataDir = readScalar(config, 'server.data_dir') ?? '';
+  expect(dataDir.replace(/\\/g, '/')).toBe(node.workPath.replace(/\\/g, '/'));
 });
 
 test('the Windows service is registered through shawl', () => {

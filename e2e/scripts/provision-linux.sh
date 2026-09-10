@@ -30,8 +30,22 @@ export_env() {
   fi
 }
 
+# The GitHub release API answers 500 often enough to lose a whole leg to it.
+retry() {
+  local attempt=1
+  until "$@"; do
+    if [ "${attempt}" -ge 3 ]; then
+      echo "::error::giving up after ${attempt} attempts: $*" >&2
+      return 1
+    fi
+    echo "attempt ${attempt} failed, retrying: $*" >&2
+    attempt=$(( attempt + 1 ))
+    sleep $(( attempt * 5 ))
+  done
+}
+
 latest_tag() {
-  gh release view --repo "$1" --json tagName -q .tagName
+  retry gh release view --repo "$1" --json tagName -q .tagName
 }
 
 node_diagnostics() {
@@ -65,7 +79,7 @@ else
 
   rm -rf "${PANEL_DIR}"
   mkdir -p "${PANEL_DIR}"
-  gh release download --repo gameap/gameap "${PANEL_TAG}" \
+  retry gh release download --repo gameap/gameap "${PANEL_TAG}" \
     --dir "${PANEL_DIR}" --pattern 'gameap-*-linux-amd64.tar.gz*'
   ( cd "${PANEL_DIR}" && tar -xzf gameap-*-linux-amd64.tar.gz )
   chmod 0755 "${PANEL_DIR}/gameap"
@@ -133,7 +147,7 @@ GAMEAPCTL_TAG="${GAMEAPCTL_TAG:-$(latest_tag gameap/gameapctl)}"
 export_env GAMEAPCTL_TAG "${GAMEAPCTL_TAG}"
 
 rm -rf /tmp/gameapctl && mkdir -p /tmp/gameapctl
-gh release download --repo gameap/gameapctl "${GAMEAPCTL_TAG}" \
+retry gh release download --repo gameap/gameapctl "${GAMEAPCTL_TAG}" \
   --dir /tmp/gameapctl --pattern 'gameapctl-*-linux-amd64.tar.gz'
 tar -xzf /tmp/gameapctl/gameapctl-*-linux-amd64.tar.gz -C /tmp/gameapctl
 docker cp /tmp/gameapctl/gameapctl "${CONTAINER}:/usr/local/bin/gameapctl"
