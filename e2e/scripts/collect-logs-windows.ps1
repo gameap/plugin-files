@@ -31,8 +31,9 @@ Save 'gameap-files-config.yaml' { Get-Content -LiteralPath (Join-Path $nodeWorkP
 Save 'users-d-listing.txt' { Get-ChildItem -LiteralPath (Join-Path $nodeWorkPath '.plugins\files\users.d') -Force }
 Save 'gameap-files-service-logs.txt' { Get-ChildItem -Path 'C:\gameap\services\logs\gameap-files' -Recurse -ErrorAction SilentlyContinue | ForEach-Object { "== $($_.FullName)"; Get-Content -LiteralPath $_.FullName -Tail 400 } }
 Save 'daemon-output.log' { Get-Content -LiteralPath 'C:\gameap\daemon\logs\output.log' -Tail 400 }
+# Get-EventLog exists only in Windows PowerShell, and the workflow runs pwsh.
 Save 'eventlog.txt' {
-  Get-EventLog -LogName Application -Newest 200 -ErrorAction SilentlyContinue |
+  Get-WinEvent -LogName Application -MaxEvents 200 -ErrorAction SilentlyContinue |
     Where-Object { $_.Message -match 'gameap|shawl' } | Format-List
 }
 

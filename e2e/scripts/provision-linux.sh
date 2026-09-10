@@ -34,6 +34,11 @@ latest_tag() {
   gh release view --repo "$1" --json tagName -q .tagName
 }
 
+node_diagnostics() {
+  docker exec "${CONTAINER}" journalctl -u gameap-daemon -n 200 --no-pager || true
+  tail -n 200 "${PANEL_LOG}" || true
+}
+
 log "Checking the upstream sources the installer will use"
 for url in \
   "https://raw.githubusercontent.com/gameap/scripts/master/ftp/gameap-files/install-files-linux.sh" \
@@ -153,20 +158,30 @@ token="$(curl -fsS --max-time 10 -H 'Content-Type: application/json' \
   "${API_URL}/api/auth/login" | jq -er .token)"
 echo "::add-mask::${token}"
 
+online=false
+summary=""
 for _ in $(seq 1 60); do
   summary="$(curl -fsS --max-time 5 -H "Authorization: Bearer ${token}" \
     "${API_URL}/api/nodes/summary" || true)"
   if echo "${summary}" | jq -e '(.total >= 1) and (.online >= 1)' > /dev/null 2>&1; then
+    online=true
     break
   fi
   sleep 3
 done
 
-nodes="$(curl -fsS --max-time 10 -H "Authorization: Bearer ${token}" "${API_URL}/api/nodes")"
-if ! echo "${nodes}" | jq -e 'map(select(.os == "linux" and .enabled)) | length >= 1' > /dev/null; then
-  echo "::error::no enabled linux node enrolled: ${nodes}"
-  docker exec "${CONTAINER}" journalctl -u gameap-daemon -n 200 --no-pager || true
-  tail -n 200 "${PANEL_LOG}" || true
+# An enrolled row is not a connected daemon, so the summary has to be the gate:
+# without this the timeout would fall through to a node that is merely enabled.
+if [ "${online}" != true ]; then
+  echo "::error::the node never came online; last summary: ${summary:-<no response>}"
+  node_diagnostics
+  exit 1
+fi
+
+nodes="$(curl -fsS --max-time 10 -H "Authorization: Bearer ${token}" "${API_URL}/api/nodes" || true)"
+if ! echo "${nodes}" | jq -e 'map(select(.os == "linux" and .enabled)) | length >= 1' > /dev/null 2>&1; then
+  echo "::error::no enabled linux node enrolled: ${nodes:-<no response>}"
+  node_diagnostics
   exit 1
 fi
 

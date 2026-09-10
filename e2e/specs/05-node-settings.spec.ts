@@ -1,9 +1,10 @@
-import { expect, test } from '@playwright/test';
+import { expect, request as apiRequest, test } from '@playwright/test';
 import { loginViaAPI } from '../fixtures/auth';
 import { env, ports } from '../fixtures/env';
 import { expectPortClosed, waitForPort, withFtp } from '../fixtures/ftp';
 import { CONFIG_PATH, nodeTarget } from '../fixtures/node/index';
 import { enrolledNode } from '../fixtures/panel';
+import { updateNodeConfig } from '../fixtures/plugin';
 import { readState } from '../fixtures/state';
 import { fillNumber, loginViaUI, openFilesAdmin } from '../fixtures/ui';
 import { readScalar, scalarKeys } from '../fixtures/yaml';
@@ -48,6 +49,26 @@ async function changePorts(
   await modal.getByTestId('node-setup-submit').click();
   expect((await saved).status()).toBe(200);
 }
+
+// The restore has to be independent of whether the rollback test below ran or
+// passed: the specs after this one connect on the original ports, and a locally
+// provisioned node is reused between runs.
+test.afterAll(async () => {
+  const context = await apiRequest.newContext();
+  try {
+    const token = await loginViaAPI(context);
+    const node = await enrolledNode(context, token, env.nodeOs);
+    await updateNodeConfig(context, token, node.id, {
+      ftp: { port: ports.ftp },
+      sftp: { port: ports.sftp },
+    });
+    await waitForPort(env.nodeHost, ports.ftp);
+  } catch (error) {
+    console.warn(`could not restore the node ports: ${error}`);
+  } finally {
+    await context.dispose();
+  }
+});
 
 test('Settings moves the listeners to new ports', async ({ page, request }) => {
   const token = await loginViaAPI(request);
@@ -96,8 +117,8 @@ test('the restarted service answers on the new port and not the old one', async 
   expect(listing.length).toBeGreaterThanOrEqual(1);
 });
 
-// The remaining specs expect the original ports, so the change is rolled back
-// through the same dialog rather than by editing the node.
+// The rollback is asserted through the same dialog an operator would use; the
+// afterAll above is the safety net for when this test never gets that far.
 test('the change can be rolled back from the same dialog', async ({
   page,
   request,

@@ -141,10 +141,19 @@ foreach ($attempt in 1..60) {
   Start-Sleep -Seconds 3
 }
 
-$nodes = Invoke-RestMethod -Uri "$apiUrl/api/nodes" -Headers $headers -TimeoutSec 10
+# $ErrorActionPreference is Stop, so an unreachable panel here would terminate
+# the script before the diagnostics below ever printed.
+$nodes = $null
+try {
+  $nodes = Invoke-RestMethod -Uri "$apiUrl/api/nodes" -Headers $headers -TimeoutSec 10
+} catch {
+  Write-Host "could not read the node list: $($_.Exception.Message)"
+}
+
 $windowsNode = $nodes | Where-Object { $_.os -eq 'windows' -and $_.enabled }
 if (-not $online -or -not $windowsNode) {
-  Write-Host "::error::no enabled windows node enrolled: $($nodes | ConvertTo-Json -Compress)"
+  $detail = if ($null -eq $nodes) { '<no response>' } else { $nodes | ConvertTo-Json -Compress }
+  Write-Host "::error::no enabled windows node enrolled: $detail"
   Get-Content -LiteralPath $panelLog -Tail 200 -ErrorAction SilentlyContinue
   Get-Content -LiteralPath 'C:\gameap\daemon\logs\output.log' -Tail 200 -ErrorAction SilentlyContinue
   exit 1

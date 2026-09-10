@@ -4,12 +4,15 @@ import { defineConfig, devices } from '@playwright/test';
 // plugin is installed, gameap-files is installed on the node, users are created
 // and then deleted. Re-running a failed test would replay a mutation against an
 // already-mutated system, so there are no retries and no parallelism; specs run
-// in the alphabetical order of their filenames.
+// in the alphabetical order of their filenames. For the same reason the run
+// stops at the first failure: everything after it would be asserting against a
+// state the scenario never reached.
 export default defineConfig({
   testDir: './specs',
   fullyParallel: false,
   workers: 1,
   retries: 0,
+  maxFailures: 1,
   forbidOnly: !!process.env.CI,
   // A node install downloads an installer and a release binary over the public
   // internet and then registers a service; 10 minutes is the per-test ceiling
