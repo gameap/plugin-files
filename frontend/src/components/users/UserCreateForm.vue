@@ -3,6 +3,7 @@
     <FormField :label="trans('username')" :error="errors.username" required>
       <n-input
         v-model:value="form.username"
+        :input-props="{ 'data-testid': 'ftp-user-username' }"
         :placeholder="trans('username_placeholder')"
       />
     </FormField>
@@ -10,6 +11,7 @@
     <FormField :label="trans('password')" :hint="trans('password_hint')">
       <n-input
         v-model:value="form.password"
+        :input-props="{ 'data-testid': 'ftp-user-password' }"
         type="password"
         show-password-on="click"
         :placeholder="trans('password_placeholder')"
@@ -19,6 +21,7 @@
     <FormField :label="trans('home_dir')" :hint="trans('home_dir_hint')">
       <n-input
         v-model:value="form.home_dir"
+        :input-props="{ 'data-testid': 'ftp-user-home-dir' }"
         :placeholder="trans('home_dir_placeholder')"
       />
     </FormField>
@@ -30,16 +33,20 @@
     >
       <n-input
         :value="quotaInput.inputValue.value"
+        :input-props="{ 'data-testid': 'ftp-user-quota' }"
         :placeholder="trans('quota_placeholder')"
         @update:value="quotaInput.updateInput"
       />
     </FormField>
 
-    <n-checkbox v-model:checked="form.enabled">{{ trans('enabled') }}</n-checkbox>
+    <n-checkbox v-model:checked="form.enabled" data-testid="ftp-user-enabled">
+      {{ trans('enabled') }}
+    </n-checkbox>
 
     <FormField :label="trans('description')">
       <n-input
         v-model:value="form.description"
+        :input-props="{ 'data-testid': 'ftp-user-description' }"
         type="textarea"
         :rows="2"
         :placeholder="trans('description_placeholder')"
@@ -59,10 +66,10 @@
     <SshKeysInline v-model="sshKeys" />
 
     <div class="flex justify-end gap-2 pt-4">
-      <GButton color="white" :disabled="loading" @click="emit('cancel')">
+      <GButton data-testid="ftp-user-cancel" color="white" :disabled="loading" @click="emit('cancel')">
         {{ trans('cancel') }}
       </GButton>
-      <GButton color="green" :loading="loading" @click="handleSubmit">
+      <GButton data-testid="ftp-user-submit" color="green" :loading="loading" @click="handleSubmit">
         <GIcon name="add-square" />
         <span class="ml-1">{{ trans('create') }}</span>
       </GButton>

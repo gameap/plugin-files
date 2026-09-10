@@ -1,8 +1,8 @@
 <template>
-  <div class="mt-2 space-y-4">
+  <div class="mt-2 space-y-4" data-testid="ftp-users-tab">
     <!-- Primary action first, node status below it -->
     <div v-if="showContent && canManage" class="flex flex-wrap gap-2">
-      <GButton color="green" size="middle" @click="showCreateModal = true">
+      <GButton data-testid="ftp-create-user" color="green" size="middle" @click="showCreateModal = true">
         <GIcon name="add-square" class="mr-0.5" />
         <span>{{ trans('create_user') }}</span>
       </GButton>

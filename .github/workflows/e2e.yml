@@ -1,0 +1,452 @@
+name: E2E
+
+on:
+  schedule:
+    # An hour after the panel's own nightly e2e, so a panel regression is
+    # already visible in gameap/gameap when this one reports.
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+    inputs:
+      legs:
+        description: 'Which OS legs to run'
+        type: choice
+        default: both
+        options: [both, linux, windows]
+      panel_source:
+        description: 'Which panel to test against'
+        type: choice
+        default: both
+        options: [both, release, main]
+      panel_tag:
+        description: 'Panel release tag (empty = latest stable). Ignored for the main leg.'
+        type: string
+        default: ''
+      gameapctl_tag:
+        description: 'gameapctl release tag (empty = latest stable)'
+        type: string
+        default: ''
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  push:
+    branches: [main]
+    paths:
+      - 'src/services/node_setup.rs'
+      - 'src/services/sync.rs'
+      - 'src/handlers/nodes.rs'
+      - 'frontend/src/components/node/**'
+      - 'frontend/src/tabs/**'
+      - 'e2e/**'
+      - '.github/workflows/e2e.yml'
+      - '.github/e2e/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Ref of gameap/gameap providing web/plugin-sdk; pin to a SHA if the SDK drifts
+  # from frontend/package-lock.json
+  GAMEAP_REF: main
+  # Ref of gameap/gameap-proto providing rust/gameap-plugin-sdk; pin to a SHA if
+  # the SDK drifts from Cargo.lock. Pinned to the head of the proto-updates
+  # branch: HTTPResponse.file / FileRef, which src/http.rs sets, is not on main
+  # yet. Restore `main` once proto-updates is merged.
+  GAMEAP_PROTO_REF: aba9a6c002358ed56691ff1f5c28d448e5f2cdee
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+      legs: ${{ steps.decide.outputs.legs }}
+      panels: ${{ steps.decide.outputs.panels }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Decide what to run
+        id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
+          INPUT_LEGS: ${{ inputs.legs || 'both' }}
+          INPUT_PANELS: ${{ inputs.panel_source || 'both' }}
+        run: |
+          set -euo pipefail
+
+          run=true
+          case "${EVENT}" in
+            pull_request)
+              # The suite depends on the public internet and takes tens of
+              # minutes; on a PR it is opt-in through the `e2e` label.
+              if echo "${LABELS}" | jq -e 'index("e2e")' > /dev/null; then
+                echo "PR carries the e2e label."
+              else
+                echo "PR has no e2e label, skipping."
+                run=false
+              fi
+              ;;
+            schedule)
+              if [ -n "$(git log --since='24 hours ago' --format=%H)" ]; then
+                echo "Commits in the last 24h, running the nightly."
+              else
+                echo "No commits in the last 24h, skipping the nightly."
+                run=false
+              fi
+              ;;
+            *)
+              echo "Event ${EVENT}: always run."
+              ;;
+          esac
+
+          case "${INPUT_LEGS}" in
+            linux)   legs='["linux"]' ;;
+            windows) legs='["windows"]' ;;
+            *)       legs='["linux","windows"]' ;;
+          esac
+
+          case "${INPUT_PANELS}" in
+            release) panels='["release"]' ;;
+            main)    panels='["main"]' ;;
+            *)       panels='["release","main"]' ;;
+          esac
+
+          {
+            echo "run=${run}"
+            echo "legs=${legs}"
+            echo "panels=${panels}"
+          } >> "${GITHUB_OUTPUT}"
+
+  build-wasm:
+    needs: check
+    if: needs.check.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: plugin-files
+          persist-credentials: false
+
+      - uses: ./plugin-files/.github/actions/build-wasm
+        with:
+          gameap-ref: ${{ env.GAMEAP_REF }}
+          gameap-proto-ref: ${{ env.GAMEAP_PROTO_REF }}
+          plugin-path: plugin-files
+          run-tests: 'false'
+          run-lint: 'false'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: files-wasm
+          path: plugin-files/files.wasm
+          retention-days: 1
+
+  # One frontend build and two cross-compiled binaries: modernc.org/sqlite is
+  # pure Go, so the Windows leg does not have to build the panel on its own
+  # much slower runner.
+  build-panel:
+    needs: check
+    if: needs.check.outputs.run == 'true' && contains(needs.check.outputs.panels, 'main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: gameap/gameap
+          ref: main
+          path: gameap
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: gameap/web/frontend/package-lock.json
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: gameap/go.mod
+          cache-dependency-path: gameap/go.sum
+
+      - name: Build the panel frontend
+        working-directory: gameap/web/frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Cross-compile the panel
+        working-directory: gameap
+        run: |
+          mkdir -p out
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o out/gameap ./cmd/gameap
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -o out/gameap.exe ./cmd/gameap
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gameap-panel-main
+          path: gameap/out/
+          retention-days: 1
+
+  e2e-linux:
+    needs: [check, build-wasm, build-panel]
+    if: |
+      always() && needs.check.outputs.run == 'true'
+      && needs.build-wasm.result == 'success'
+      && (needs.build-panel.result == 'success' || needs.build-panel.result == 'skipped')
+      && contains(needs.check.outputs.legs, 'linux')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        panel: ${{ fromJson(needs.check.outputs.panels) }}
+    env:
+      DATABASE_DRIVER: sqlite
+      DATABASE_URL: 'file:/tmp/gameap/db.sqlite?_busy_timeout=5000&_journal_mode=WAL&cache=shared'
+      AUTH_SECRET: e2e-test-secret-do-not-use-in-prod-32b
+      ENCRYPTION_KEY: e2e-encryption-key-do-not-use-32b
+      AUTH_REQUIRE_MFA_FOR_ADMINS: 'false'
+      HTTP_HOST: 0.0.0.0
+      HTTP_PORT: '8025'
+      FILES_LOCAL_BASE_PATH: /tmp/gameap/files
+      ADMIN_LOGIN: admin
+      ADMIN_EMAIL: admin@localhost
+      ADMIN_PASSWORD: e2e-Adm1n-pw-do-not-use
+      GRPC_PORT: '31718'
+      GRPC_TLS_ENABLED: 'true'
+      # Feeds the SANs of the panel's gRPC certificate, so it has to be the name
+      # the daemon dials and has to be set before the panel first starts.
+      GRPC_EXTERNAL_HOST: host.docker.internal
+      GRPC_EXTERNAL_PORT: '31718'
+      DAEMON_SETUP_KEY: e2e-fixed-setup-key-do-not-use
+      PLUGINS_PERMISSIONS_ENFORCE: 'true'
+      E2E_BASE_URL: http://127.0.0.1:8025
+      E2E_API_BASE_URL: http://127.0.0.1:8025
+      E2E_ADMIN_USER: admin
+      E2E_ADMIN_PASSWORD: e2e-Adm1n-pw-do-not-use
+      E2E_NODE_OS: linux
+      E2E_NODE_CONTAINER: gameap-node
+      E2E_NODE_WORK_PATH: /srv/gameap
+      E2E_RUN_ID: ${{ github.run_id }}
+      PANEL_TAG: ${{ inputs.panel_tag }}
+      GAMEAPCTL_TAG: ${{ inputs.gameapctl_tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: files-wasm
+          path: artifacts
+
+      - uses: actions/download-artifact@v4
+        if: matrix.panel == 'main'
+        with:
+          name: gameap-panel-main
+          path: panel-main
+
+      - name: Point the suite at the built wasm
+        run: echo "E2E_WASM_PATH=${GITHUB_WORKSPACE}/artifacts/files.wasm" >> "${GITHUB_ENV}"
+
+      - name: Use the panel built from main
+        if: matrix.panel == 'main'
+        run: |
+          chmod 0755 "${GITHUB_WORKSPACE}/panel-main/gameap"
+          echo "PANEL_BINARY=${GITHUB_WORKSPACE}/panel-main/gameap" >> "${GITHUB_ENV}"
+
+      - name: Provision the panel and the node
+        run: ./e2e/scripts/provision-linux.sh
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+
+      - name: Install the suite
+        working-directory: e2e
+        run: npm ci
+
+      - name: Install Playwright
+        working-directory: e2e
+        run: npx playwright install --with-deps chromium
+
+      - name: Run the suite
+        working-directory: e2e
+        run: npx playwright test
+
+      - name: Collect logs
+        if: always()
+        run: ./e2e/scripts/collect-logs-linux.sh e2e-logs
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-logs-linux-${{ matrix.panel }}
+          path: e2e-logs/
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report-linux-${{ matrix.panel }}
+          path: |
+            e2e/playwright-report/
+            e2e/test-results/
+          retention-days: 14
+          if-no-files-found: ignore
+
+  e2e-windows:
+    needs: [check, build-wasm, build-panel]
+    if: |
+      always() && needs.check.outputs.run == 'true'
+      && needs.build-wasm.result == 'success'
+      && (needs.build-panel.result == 'success' || needs.build-panel.result == 'skipped')
+      && contains(needs.check.outputs.legs, 'windows')
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    strategy:
+      fail-fast: false
+      matrix:
+        panel: ${{ fromJson(needs.check.outputs.panels) }}
+    env:
+      DATABASE_DRIVER: sqlite
+      DATABASE_URL: 'file:C:/gameap-e2e/db.sqlite?_busy_timeout=5000&_journal_mode=WAL&cache=shared'
+      AUTH_SECRET: e2e-test-secret-do-not-use-in-prod-32b
+      ENCRYPTION_KEY: e2e-encryption-key-do-not-use-32b
+      AUTH_REQUIRE_MFA_FOR_ADMINS: 'false'
+      HTTP_HOST: 127.0.0.1
+      HTTP_PORT: '8025'
+      FILES_LOCAL_BASE_PATH: C:\gameap-e2e\files
+      ADMIN_LOGIN: admin
+      ADMIN_EMAIL: admin@localhost
+      ADMIN_PASSWORD: e2e-Adm1n-pw-do-not-use
+      GRPC_PORT: '31718'
+      GRPC_TLS_ENABLED: 'true'
+      GRPC_EXTERNAL_HOST: 127.0.0.1
+      GRPC_EXTERNAL_PORT: '31718'
+      DAEMON_SETUP_KEY: e2e-fixed-setup-key-do-not-use
+      PLUGINS_PERMISSIONS_ENFORCE: 'true'
+      E2E_BASE_URL: http://127.0.0.1:8025
+      E2E_API_BASE_URL: http://127.0.0.1:8025
+      E2E_ADMIN_USER: admin
+      E2E_ADMIN_PASSWORD: e2e-Adm1n-pw-do-not-use
+      E2E_NODE_OS: windows
+      E2E_NODE_WORK_PATH: C:\gameap
+      E2E_RUN_ID: ${{ github.run_id }}
+      PANEL_TAG: ${{ inputs.panel_tag }}
+      GAMEAPCTL_TAG: ${{ inputs.gameapctl_tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: files-wasm
+          path: artifacts
+
+      - uses: actions/download-artifact@v4
+        if: matrix.panel == 'main'
+        with:
+          name: gameap-panel-main
+          path: panel-main
+
+      - name: Point the suite at the built wasm
+        run: |
+          "E2E_WASM_PATH=$env:GITHUB_WORKSPACE\artifacts\files.wasm" |
+            Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Use the panel built from main
+        if: matrix.panel == 'main'
+        run: |
+          "PANEL_BINARY=$env:GITHUB_WORKSPACE\panel-main\gameap.exe" |
+            Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Provision the panel and the node
+        run: ./e2e/scripts/provision-windows.ps1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+
+      - name: Install the suite
+        working-directory: e2e
+        run: npm ci
+
+      - name: Install Playwright
+        working-directory: e2e
+        run: npx playwright install chromium
+
+      - name: Run the suite
+        working-directory: e2e
+        run: npx playwright test
+
+      - name: Collect logs
+        if: always()
+        run: ./e2e/scripts/collect-logs-windows.ps1 -Out e2e-logs
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-logs-windows-${{ matrix.panel }}
+          path: e2e-logs/
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report-windows-${{ matrix.panel }}
+          path: |
+            e2e/playwright-report/
+            e2e/test-results/
+          retention-days: 14
+          if-no-files-found: ignore
+
+  summary:
+    needs: [check, e2e-linux, e2e-windows]
+    if: always() && needs.check.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Report
+        env:
+          LINUX: ${{ needs.e2e-linux.result }}
+          WINDOWS: ${{ needs.e2e-windows.result }}
+          LEGS: ${{ needs.check.outputs.legs }}
+          PANELS: ${{ needs.check.outputs.panels }}
+        run: |
+          {
+            echo "## E2E"
+            echo
+            echo "| Leg     | Result     |"
+            echo "|---------|------------|"
+            echo "| Linux   | ${LINUX}   |"
+            echo "| Windows | ${WINDOWS} |"
+            echo
+            echo "Legs requested: \`${LEGS}\`, panels: \`${PANELS}\`."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          for result in "${LINUX}" "${WINDOWS}"; do
+            case "${result}" in
+              success|skipped) ;;
+              *) echo "::error::an e2e leg ended as ${result}"; exit 1 ;;
+            esac
+          done

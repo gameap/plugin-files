@@ -8,6 +8,7 @@
     <FormField :label="trans('new_password')" :hint="trans('new_password_hint')">
       <n-input
         v-model:value="form.password"
+        :input-props="{ 'data-testid': 'ftp-user-edit-password' }"
         type="password"
         show-password-on="click"
         :placeholder="trans('new_password_placeholder')"
@@ -17,6 +18,7 @@
     <FormField :label="trans('home_dir')">
       <n-input
         v-model:value="form.home_dir"
+        :input-props="{ 'data-testid': 'ftp-user-edit-home-dir' }"
         :placeholder="trans('home_dir_placeholder')"
       />
     </FormField>
@@ -28,16 +30,20 @@
     >
       <n-input
         :value="quotaInput.inputValue.value"
+        :input-props="{ 'data-testid': 'ftp-user-edit-quota' }"
         :placeholder="trans('quota_placeholder')"
         @update:value="quotaInput.updateInput"
       />
     </FormField>
 
-    <n-checkbox v-model:checked="form.enabled">{{ trans('enabled') }}</n-checkbox>
+    <n-checkbox v-model:checked="form.enabled" data-testid="ftp-user-edit-enabled">
+      {{ trans('enabled') }}
+    </n-checkbox>
 
     <FormField :label="trans('description')">
       <n-input
         v-model:value="form.description"
+        :input-props="{ 'data-testid': 'ftp-user-edit-description' }"
         type="textarea"
         :rows="2"
         :placeholder="trans('description_placeholder')"
@@ -45,10 +51,10 @@
     </FormField>
 
     <div class="flex justify-end gap-2 pt-4">
-      <GButton color="white" :disabled="loading" @click="emit('cancel')">
+      <GButton data-testid="ftp-user-edit-cancel" color="white" :disabled="loading" @click="emit('cancel')">
         {{ trans('cancel') }}
       </GButton>
-      <GButton color="green" :loading="loading" @click="handleSubmit">
+      <GButton data-testid="ftp-user-edit-submit" color="green" :loading="loading" @click="handleSubmit">
         <GIcon name="save" />
         <span class="ml-1">{{ trans('save') }}</span>
       </GButton>

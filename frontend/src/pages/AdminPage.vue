@@ -2,7 +2,13 @@
   <GBreadcrumbs :items="breadcrumbs" class="mb-4" />
 
   <div class="mb-4 flex flex-wrap gap-2">
-    <GButton color="white" size="small" :disabled="nodesLoading" @click="refreshNodes">
+    <GButton
+      data-testid="ftp-nodes-refresh"
+      color="white"
+      size="small"
+      :disabled="nodesLoading"
+      @click="refreshNodes"
+    >
       <GIcon name="refresh" :class="nodesLoading ? 'fa-spin' : ''" />
       <span class="ml-1">{{ trans('refresh') }}</span>
     </GButton>
@@ -18,7 +24,7 @@
     <GEmpty :description="trans('no_nodes')" />
   </div>
 
-  <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+  <div v-else data-testid="ftp-nodes-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
     <FtpNodeCard
       v-for="node in filteredNodes"
       :key="node.id"

@@ -8,7 +8,7 @@ info:
     url: https://opensource.org/licenses/MIT
 
 servers:
-  - url: /plugins/files
+  - url: /api/plugins/files
     description: Plugin API base path
 
 tags:

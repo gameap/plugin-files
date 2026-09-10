@@ -125,6 +125,28 @@ cargo build --target wasm32-wasip1 --release   # rebuild wasm
 cd frontend && npm run debug   # standalone UI against MSW mocks
 ```
 
+## Testing
+
+`make test` covers the router and handler stack natively against an in-memory
+mock host, plus the frontend's vitest suite. Neither touches a panel.
+
+The end-to-end suite in [`e2e/`](e2e/README.md) does: it uploads `files.wasm`
+into a real panel, installs gameap-files on a real node from the admin page,
+creates an FTP user on a game server, and logs in over FTP and SFTP as that
+user. It runs on Linux and on Windows, because the installers, the service
+managers and the paths differ on each.
+
+| Command                 | What it does                                            |
+|-------------------------|----------------------------------------------------------|
+| `make e2e-deps`         | Installs the suite and its Chromium build                |
+| `make e2e`              | Runs it against an already provisioned panel and node    |
+| `e2e/scripts/provision-linux.sh` | Brings up that panel and node on a Linux host   |
+
+In CI it is the `E2E` workflow: nightly behind a commit gate, on demand through
+`workflow_dispatch`, and on a pull request only when the PR carries the `e2e`
+label. The matrix covers the latest panel release and a panel built from
+`main`.
+
 ## Installation
 
 Requires GameAP **4.5 or newer**. The plugin reads its own permission grants

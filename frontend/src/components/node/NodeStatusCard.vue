@@ -1,5 +1,5 @@
 <template>
-  <n-card size="small">
+  <n-card size="small" data-testid="node-status-card">
     <div class="flex items-center justify-between">
       <div class="flex items-center gap-3">
         <div :class="statusIconClasses">
@@ -9,7 +9,7 @@
           <div class="font-medium text-stone-800 dark:text-stone-100">
             {{ trans('node_status') }}
           </div>
-          <div class="text-sm text-stone-500 dark:text-stone-400">
+          <div class="text-sm text-stone-500 dark:text-stone-400" data-testid="node-status-text">
             {{ statusText }}
           </div>
         </div>
@@ -19,6 +19,7 @@
         <!-- Install/Retry button -->
         <GButton
           v-if="status?.status === 'not_installed' || status?.status === 'failed'"
+          data-testid="node-status-install"
           color="green"
           size="small"
           :loading="loading"
@@ -32,8 +33,9 @@
 
         <!-- Version badge, update and settings buttons -->
         <template v-else-if="status?.status === 'installed'">
-          <GStatusBadge status="success" :text="status.version" />
+          <GStatusBadge data-testid="node-status-version" status="success" :text="status.version" />
           <GButton
+            data-testid="node-status-update"
             color="white"
             size="small"
             :loading="loading"
@@ -44,6 +46,7 @@
             <span class="hidden lg:inline ml-1">{{ trans('update_installation') }}</span>
           </GButton>
           <GButton
+            data-testid="node-status-settings"
             color="white"
             size="small"
             :loading="configLoading"
